@@ -301,3 +301,4 @@ lerna-debug.log
 Thumbs.db
 
 Model/dataset/*
+Model/vishal-datasets/*
