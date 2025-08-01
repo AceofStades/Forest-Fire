@@ -300,5 +300,5 @@ lerna-debug.log
 .DS_Store
 Thumbs.db
 
-Model/dataset/*
-Model/vishal-datasets/*
+Model/dataset
+Model/vishal-datasets
