@@ -2,3 +2,4 @@
 maxUploadSize = 999999
 maxMessageSize = 999999
 disconnectedSessionTTL = 600
+runOnSave = true
