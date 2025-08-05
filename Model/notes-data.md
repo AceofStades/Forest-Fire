@@ -1,19 +1,19 @@
 # DataSets
 
-[x] ERA5-Land
+- [x] ERA5-Land
 
-[x] Terrain Parameters (Slope and Aspect)
+- [x] Terrain Parameters (Slope and Aspect)
 
 These are derived from Digital Elevation Models (DEMs) and are vital for understanding how topography influences fire spread.
 > Link: https://bhoonidhi.nrsc.gov.in/
 
-[ ] Thematic Data (Fuel Availability using LULC)
+- [ ] Thematic Data (Fuel Availability using LULC)
 
 Land Use Land Cover (LULC) maps are fundamental for identifying different vegetation types, which serve as fuel for fires.
 Bhuvan (NRSC/ISRO)
 > Link: https://bhuvan.nrsc.gov.in/, https://bhuvan-app1.nrsc.gov.in/thematic/
 
-[ ] Historical Fire Data
+- [ ] Historical Fire Data
 
 This data will serve as your target variable for training the fire prediction model and for validating the fire spread simulations.
 
@@ -33,7 +33,7 @@ This data will serve as your target variable for training the fire prediction mo
 
         Link: https://www.fsiforestfire.gov.in/
 
-[ ] Human Settlement & Stressor Layers
+- [ ] Human Settlement & Stressor Layers
 
 These layers help identify potential ignition sources and areas of human impact, which are indirect factors influencing fire occurrence.
 
