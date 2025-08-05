@@ -1,5 +1,7 @@
 # Attributes Table
 
+## ERA5-Land
+
 |Attr|FullForm|
 |---|---|
 |e|Evaporation|
@@ -31,3 +33,16 @@ North Latitude: 31.5° N
 South Latitude: 28.7° N
 West Longitude: 77.5° E
 East Longitude: 81.1° E
+
+## MODIS (Historical Fire Data)
+
+|Attr|Description|
+|---|---|
+|scan, track|These values relate to the dimensions of the fire pixel. They can be used to calculate the actual size of the pixel on the ground.|
+|acq_date, acq_time|The date and time when the satellite detected the fire. This is essential for temporal analysis and linking fire events to specific weather data.|
+|satellite, instrument|The satellite (Terra or Aqua) and instrument (MODIS) that captured the data.|
+|confidence|A value from 0-100% indicating the quality of the detection. High-confidence detections are more reliable.|
+|bright_t31|The brightness temperature of the fire pixel in band 31 (11.0µm), in Kelvin. This is used for fire detection and characterization.|
+|frp|Fire Radiative Power, measured in megawatts. This is a measure of the fire's energy and intensity, which can be used to estimate biomass burning.|
+|daynight|Indicates whether the detection was made during the day or night.|
+|type|Categorizes the type of fire, such as "1" for a vegetation fire.|

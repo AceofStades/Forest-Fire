@@ -1,9 +1,11 @@
 # DataSets
 
+## To-do
+
 - [x] ERA5-Land
 - [x] Terrain Parameters (Slope and Aspect)
 - [ ] Thematic Data (Fuel Availability using LULC)
-- [ ] Historical Fire Data
+- [x] Historical Fire Data
 - [ ] Human Settlement & Stressor Layers
 
 
