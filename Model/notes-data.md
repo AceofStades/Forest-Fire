@@ -4,9 +4,9 @@
 
 - [x] ERA5-Land
 - [x] Terrain Parameters (Slope and Aspect)
-- [ ] Thematic Data (Fuel Availability using LULC)
+- [x] Thematic Data (Fuel Availability using LULC)
 - [x] Historical Fire Data
-- [ ] Human Settlement & Stressor Layers
+- [x] Human Settlement & Stressor Layers
 
 
 
