@@ -1,5 +1,6 @@
 import streamlit as st
 import xarray as xr
+import pandas as pd
 # from netCDF4 import Dataset
 
 st.set_page_config(layout="wide")
@@ -16,10 +17,11 @@ df3 = ds3.to_dataframe()
 ds4 = xr.open_dataset("dataset/ERA5-Land/era5-may/data_0.nc")
 df4 = ds4.to_dataframe()
 
+df5 = pd.read_csv("dataset/MODIS/modis_2016_India.csv")
+
 # st.dataframe(df1)
 st.dataframe(df1.head())
 st.dataframe(df2.head())
 st.dataframe(df3.head())
 st.dataframe(df4.head())
-
-# st.dataframe(df2)
+st.dataframe(df5.head())
