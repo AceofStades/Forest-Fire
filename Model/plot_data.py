@@ -2,7 +2,7 @@ import rasterio
 import matplotlib.pyplot as plt
 
 # Replace 'path/to/your/dem.tif' with the actual path to your downloaded DEM file
-file_path = 'dataset/DEM/merged_dem.tif'
+file_path = 'dataset/LULC/UK_LULC50K_2016.tif'
 
 try:
     with rasterio.open(file_path) as src:
@@ -23,7 +23,7 @@ try:
 
         # --- Change this line ---
         # Save the plot as a PNG file instead of showing it
-        plt.savefig('dem_plot.png')
+        plt.savefig('lulc.png')
         print("Plot saved as dem_plot.png")
         # ------------------------
 
