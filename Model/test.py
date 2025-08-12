@@ -16,5 +16,3 @@ final_era_dataset = xr.concat([era_april_merged, era_may_merged], dim='time')
 final_era_dataset.to_netcdf("merged_era5.nc", format='NETCDF4')
 
 print("Final merged NetCDF file has been saved as 'merged_era5.nc'.")
-
-hi
