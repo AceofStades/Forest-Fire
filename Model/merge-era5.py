@@ -11,8 +11,13 @@ cvl_static_reindexed = cvl_static.reindex_like(era_april, method='nearest')
 era_april_merged = era_april.merge(cvl_static_reindexed)
 era_may_merged = era_may.merge(cvl_static_reindexed)
 
-final_era_dataset = xr.concat([era_april_merged, era_may_merged], dim='time')
+era_april_merged = era_april_merged.drop_vars(['number', 'expver'])
+era_may_merged = era_may_merged.drop_vars(['number', 'expver'])
+
+final_era_dataset = xr.combine_by_coords([era_april_merged, era_may_merged], combine_attrs='override')
 
 final_era_dataset.to_netcdf("merged_era5.nc", format='NETCDF4')
 
 print("Final merged NetCDF file has been saved as 'merged_era5.nc'.")
+print("The final dataset should have a single, continuous 'valid_time' dimension.")
+print(final_era_dataset)
