@@ -54,4 +54,4 @@ Access: Data can be directly downloaded from the GHSL website, often by tiles or
 
 Link: https://ghsl.jrc.ec.europa.eu/download.php
 
-Once you have these datasets, the next crucial step will be to preprocess them, ensuring they are all aligned to a common coordinate system and resampled to your target 30m resolution, forming a comprehensive feature stack for your machine learning models.
+Once you have these datasets, the next crucial step will be to preprocess them, ensuring they are all aligned to a common coordinate system and resampled to your target 30m resolution, forming a comprehensive feature stack for your machine learning models
