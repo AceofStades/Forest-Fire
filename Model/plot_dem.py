@@ -2,7 +2,7 @@ import rasterio
 import matplotlib.pyplot as plt
 
 # Replace 'path/to/your/dem.tif' with the actual path to your downloaded DEM file
-file_path = 'dataset/LULC/UK_LULC50K_2016.tif'
+file_path = 'dataset/DEM/merged_dem.tif'
 
 try:
     with rasterio.open(file_path) as src:
