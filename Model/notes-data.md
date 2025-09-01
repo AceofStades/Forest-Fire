@@ -55,3 +55,12 @@ Access: Data can be directly downloaded from the GHSL website, often by tiles or
 Link: https://ghsl.jrc.ec.europa.eu/download.php
 
 Once you have these datasets, the next crucial step will be to preprocess them, ensuring they are all aligned to a common coordinate system and resampled to your target 30m resolution, forming a comprehensive feature stack for your machine learning models
+
+
+## Source
+
+- [ERA5-Land](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land-timeseries?tab=download)
+- [DEM](https://bhoonidhi.nrsc.gov.in/)
+- [LULC](https://bhuvan-app1.nrsc.gov.in/thematic/thematic/index.php)
+- [MODIS](https://firms.modaps.eosdis.nasa.gov/country/)
+- [GHS](https://human-settlement.emergency.copernicus.eu/download.php)
