@@ -113,9 +113,28 @@ def train_model(train_loader, val_loader, input_channels):
         # Validation
         model.eval()
         val_loss = 0.0
-
         with torch.no_grad():
-        	val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [VALID]", unit="batch")
-         	for inputs, labels in val_pbar:
-          		inputs = inputs.to(DEVICE)
-            	labels = labels.to(DEVICE)
+                    val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [VALID]", unit="batch")
+                    for inputs, labels in val_pbar:
+                        inputs = inputs.to(DEVICE)
+                        labels = labels.to(DEVICE)
+
+                        outputs = model(inputs)
+                        loss = criterion(outputs, labels)
+                        val_loss += loss.item() * inputs.size(0)
+                        val_pbar.set_postfix(loss=f"{loss.item():.6f}")
+
+        epoch_val_loss = val_loss / len(val_loader.dataset)
+
+        print(f"\nEpoch {epoch+1} Complete:")
+        print(f"  Training Loss: {epoch_loss:.6f}")
+        print(f"  Validation Loss: {epoch_val_loss:.6f}")
+
+        if epoch_val_loss < best_val_loss:
+       		best_val_loss = epoch_val_loss
+         	torch.save(model.state_dict(), 'best_fire_prediction_unet.pth')
+          	print("	 >>> Model Saved (Best Validation Loss)")
+
+if __name__ == "__main__":
+	train_loader, val_loader, input_channels = load_split_data()
+	train_model(train_loader, val_loader, input_channels)
