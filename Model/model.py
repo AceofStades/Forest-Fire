@@ -115,3 +115,7 @@ def train_model(train_loader, val_loader, input_channels):
         val_loss = 0.0
 
         with torch.no_grad():
+        	val_pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [VALID]", unit="batch")
+         	for inputs, labels in val_pbar:
+          		inputs = inputs.to(DEVICE)
+            	labels = labels.to(DEVICE)
