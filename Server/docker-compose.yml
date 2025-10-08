@@ -1,0 +1,11 @@
+version: "3.8"
+services:
+  backend:
+    build: ./Server
+    ports:
+      - "8000:8000"
+    environment:
+      - ALLOWED_ORIGINS=http://localhost:3000
+      - MODEL_PATH=/models/model.pkl
+    volumes:
+      - ./Model:/models:ro   # mount your Model folder into container
