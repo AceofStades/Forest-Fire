@@ -18,7 +18,7 @@ class FireDataset(Dataset):
     def __len__(self):
         return len(self.X)
 
-    def __getitem__(self, idx):  # CORRECTED SYNTAX: (self.idx) -> (self, idx)
+    def __getitem__(self, idx):
         return self.X[idx], self.Y[idx]
 
 
@@ -34,16 +34,22 @@ def load_split_data(
     feature_vars = [v for v in ds.data_vars if v not in ["MODIS_FIRE_T1"]]
 
     # Temporal Shift: Features from Day t predict fire from Day t + 1
-    modis_target = ds["MODIS_FIRE_T1"].shift(valid_time=-1)
-    Y_labels = modis_target.isel(valid_time=slice(0, -1)).values
-    X_features = ds[feature_vars].isel(valid_time=slice(0, -1))
+    # We rely on 'valid_time' being the time coordinate
+    time_dim_name = "valid_time"
+
+    modis_target = ds["MODIS_FIRE_T1"].shift(**{time_dim_name: -1})
+    Y_labels = modis_target.isel(**{time_dim_name: slice(0, -1)}).values
+    X_features = ds[feature_vars].isel(**{time_dim_name: slice(0, -1)})
 
     # Convert to Tensors and Normalize
     X_data = (
         X_features.to_array(dim="channel")
-        .transpose("valid_time", "channel", "latitude", "longitude")
+        # Transpose to PyTorch standard: (Sample, Channel, Latitude, Longitude)
+        .transpose(time_dim_name, "channel", "latitude", "longitude")
         .values
     )
+
+    # Min-Max Normalization: Applied per-channel across all time and space
     X_data_min = X_data.min(axis=(0, 2, 3), keepdims=True)
     X_data_max = X_data.max(axis=(0, 2, 3), keepdims=True)
     X_data_norm = (X_data - X_data_min) / (X_data_max - X_data_min + 1e-6)
@@ -51,9 +57,10 @@ def load_split_data(
     X_data_tensor = torch.tensor(X_data_norm, dtype=torch.float32)
     Y_labels_tensor = torch.tensor(Y_labels, dtype=torch.float32).unsqueeze(1)
 
-    print("Total time steps avaiable for training: ", X_data_tensor.shape[0])
+    print("Total time steps available for training: ", X_data_tensor.shape[0])
     print("Number of feature channels: ", X_data_tensor.shape[1])
 
+    # Split:
     X_train, X_val, Y_train, Y_val = train_test_split(
         X_data_tensor,
         Y_labels_tensor,
