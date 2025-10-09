@@ -46,3 +46,14 @@ East Longitude: 81.1° E
 |frp|Fire Radiative Power, measured in megawatts. This is a measure of the fire's energy and intensity, which can be used to estimate biomass burning.|
 |daynight|Indicates whether the detection was made during the day or night.|
 |type|Categorizes the type of fire, such as "1" for a vegetation fire.|
+
+### Convolution 3x3 layer
+
+- A 3x3 convolution layer uses a 3x3 filter (or kernel) to slide across an input image or feature map, performing a dot product at each position to extract features like edges or textures.
+- This process generates feature maps, which highlight specific patterns and are used in tasks like image recognition and object detection.
+- The 3x3 size is a balance between capturing contextual information and computational efficiency, as multiple 3x3 convolutions can form a larger effective receptive field with fewer parameters than a single larger kernel.
+
+### Max Pooling Layer
+
+- A max pooling layer reduces the spatial size of an image or feature map by dividing it into a grid of smaller regions and selecting the maximum value from each region to form a new, compressed representation.
+- This downsampling process makes the network more efficient by decreasing the computational load and memory requirements, helps prevent overfitting, and provides a degree of translation invariance, allowing the network to recognize features regardless of their exact position.
