@@ -9,6 +9,8 @@ st.set_page_config(layout="wide")
 
 # --- 1. CONFIGURATION ---
 FINAL_STACK_PATH = "dataset/final_feature_stack.nc"
+FINAL_STACK_PATH1 = "dataset/final_feature_stack1.nc"
+FINAL_STACK_PATH2 = "dataset/final_feature_stack2.nc"
 MODIS_CSV_PATH = "dataset/MODIS/modis_2016_India.csv"
 
 
@@ -62,6 +64,26 @@ st.caption(
 df_final_stack_head = safe_xarray_head(FINAL_STACK_PATH)
 st.dataframe(df_final_stack_head)
 
+
+## Final Feature Stack Display
+st.subheader("1. Final Feature Stack (1km Fused Data)")
+st.caption(
+    f"Showing the first 5 time steps (rows) and first 5x5 pixels (columns) from: {FINAL_STACK_PATH1}"
+)
+
+# Load only the safe sample slice
+df_final_stack_head = safe_xarray_head(FINAL_STACK_PATH1)
+st.dataframe(df_final_stack_head)
+
+## Final Feature Stack Display
+st.subheader("1. Final Feature Stack (1km Fused Data)")
+st.caption(
+    f"Showing the first 5 time steps (rows) and first 5x5 pixels (columns) from: {FINAL_STACK_PATH1}"
+)
+
+# Load only the safe sample slice
+df_final_stack_head = safe_xarray_head(FINAL_STACK_PATH2)
+st.dataframe(df_final_stack_head)
 
 ## Optional Visualizations (Keeping them small)
 st.divider()
