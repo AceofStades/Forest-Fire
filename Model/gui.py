@@ -12,6 +12,8 @@ FINAL_STACK_PATH = "dataset/final_feature_stack.nc"
 FINAL_STACK_PATH1 = "dataset/final_feature_stack1.nc"
 FINAL_STACK_PATH2 = "dataset/final_feature_stack2.nc"
 MODIS_CSV_PATH = "dataset/MODIS/modis_2016_India.csv"
+ERA5_PATH = "dataset/ERA5-Land/final-era5.nc"
+ERA5_PATH_RE = "dataset/ERA5-Land/final-era5_rechunked.nc"
 
 
 # --- 2. Function to Safely Load and Sample Xarray Data ---
@@ -102,3 +104,13 @@ st.image(
     "dataset/GHS/ghs_downsampled_plot.png", caption="GHS (Human Settlement) Sample"
 )
 st.image("dataset/LULC/lulc.png", caption="LULC (Land Cover) Sample")
+
+
+st.subheader("ERA5-Land")
+st.caption(
+    f"Showing the first 5 time steps (rows) and first 5x5 pixels (columns) from: {ERA5_PATH}"
+)
+
+# Load only the safe sample slice
+df_final_stack_head = safe_xarray_head(ERA5_PATH)
+st.dataframe(df_final_stack_head)
