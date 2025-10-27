@@ -11,7 +11,7 @@ from .model_wrapper import load_model
 app = FastAPI(title="Forest Fire Prediction API")
 
 # CORS: allow Next.js (adjust origins as needed)
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000") or "http://localhost:3000"
 origins = [o.strip() for o in ALLOWED_ORIGINS.split(",") if o.strip()]
 
 app.add_middleware(
@@ -40,6 +40,12 @@ def on_startup():
 @app.get("/health")
 def health():
     return {"status": "ok", "model_loaded": model is not None}
+
+
+# testing
+@app.post("/test", response_model=PredictionResponse)
+def test(features: Features):
+    return predict(features)
 
 @app.post("/predict", response_model=PredictionResponse)
 def predict(features: Features):

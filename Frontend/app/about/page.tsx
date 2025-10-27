@@ -103,31 +103,31 @@ export default function AboutPage() {
                     VB
                   </div>
                   <h4 className="font-medium">Vishal Barai</h4>
-                  <p className="text-sm text-muted-foreground">Project Lead & ML Engineer</p>
-                  <p className="text-xs text-muted-foreground mt-1">AI/ML Specialist</p>
+                  <p className="text-sm text-muted-foreground">Project Lead</p>
+                  <p className="text-xs text-muted-foreground mt-1">Backend Developer</p>
                 </div>
                 <div className="text-center">
                   <div className="w-20 h-20 bg-gradient-to-br from-green-500 to-teal-600 rounded-full mx-auto mb-3 flex items-center justify-center text-white font-bold text-xl">
-                    AD
+                    SB
                   </div>
-                  <h4 className="font-medium">Ankit Dubey</h4>
-                  <p className="text-sm text-muted-foreground">GIS Specialist & Data Analyst</p>
-                  <p className="text-xs text-muted-foreground mt-1">Geospatial Technology Expert</p>
+                  <h4 className="font-medium">Shravani Bhogle</h4>
+                  <p className="text-sm text-muted-foreground">Frontend Developer</p>
+                  <p className="text-xs text-muted-foreground mt-1">UI/UX and 3D Visualization</p>
                 </div>
                 <div className="text-center">
                   <div className="w-20 h-20 bg-gradient-to-br from-orange-500 to-red-600 rounded-full mx-auto mb-3 flex items-center justify-center text-white font-bold text-xl">
-                    RV
+                    RB
                   </div>
-                  <h4 className="font-medium">Raj Vishwakarma</h4>
-                  <p className="text-sm text-muted-foreground">Frontend Developer</p>
-                  <p className="text-xs text-muted-foreground mt-1">UI/UX & 3D Visualization</p>
+                  <h4 className="font-medium">Rahul Bokade</h4>
+                  <p className="text-sm text-muted-foreground">AIML Engineer</p>
+                  <p className="text-xs text-muted-foreground mt-1">Geospatial Technology Expert</p>
                 </div>
                 <div className="text-center">
                   <div className="w-20 h-20 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full mx-auto mb-3 flex items-center justify-center text-white font-bold text-xl">
-                    SR
+                    YC
                   </div>
-                  <h4 className="font-medium">Shekhar Rathod</h4>
-                  <p className="text-sm text-muted-foreground">Backend Developer</p>
+                  <h4 className="font-medium">Yug Chapherkar</h4>
+                  <p className="text-sm text-muted-foreground">Data Analyst </p>
                   <p className="text-xs text-muted-foreground mt-1">System Architecture & APIs</p>
                 </div>
               </div>

@@ -1,42 +1,39 @@
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Navigation } from "@/components/navigation"
-import { Zap, Globe, Layers3 } from "lucide-react"
+// import { Zap, Globe, Layers3 } from "lucide-react"
 import Hero1 from "@/components/hero1"
 import LandingFeatures from "@/components/LandingFeatures"
+import axios from "axios";
+import Techstack from "@/components/techstack"
+// import CTA from "@/components/CTA"
 
 export default function HomePage() {
+
+
+
+  const fetchPrediction = async () => {
+    try {
+      const response = await axios.post("http://localhost:8000/predict", {
+        temperature: 25,
+        humidity: 70,
+        wind_speed: 5,
+      });
+      console.log(response.data);
+    } catch (error) {
+      console.error("Error fetching prediction:", error);
+    }
+  };
+
+
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 via-red-50 to-yellow-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
       <Navigation />
       <Hero1 />
       <LandingFeatures />
+      <Techstack />
 
-      {/* Technology Stack */}
-      <section className="container mx-auto px-4 py-16 bg-white/50 dark:bg-gray-800/50 rounded-lg mx-4">
-        <h2 className="text-3xl font-bold text-center mb-12">Powered by Advanced Technology</h2>
-        <div className="grid md:grid-cols-3 gap-8 text-center">
-          <div>
-            <Zap className="h-12 w-12 text-orange-600 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold mb-2">Machine Learning</h3>
-            <p className="text-muted-foreground">U-Net, LSTM, and Cellular Automata models for accurate predictions</p>
-          </div>
-          <div>
-            <Globe className="h-12 w-12 text-blue-600 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold mb-2">Geospatial Analysis</h3>
-            <p className="text-muted-foreground">
-              Advanced GIS processing with Leaflet.js and geospatial data handling
-            </p>
-          </div>
-          <div>
-            <Layers3 className="h-12 w-12 text-green-600 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold mb-2">3D Innovation</h3>
-            <p className="text-muted-foreground">
-              Three.js powered 3D terrain conversion and immersive fire simulation
-            </p>
-          </div>
-        </div>
-      </section>
 
       {/* CTA Section */}
       <section className="container mx-auto px-4 py-16 text-center">
@@ -58,6 +55,8 @@ export default function HomePage() {
           </Button>
         </div>
       </section>
+
+      
     </div>
   )
 }
