@@ -1,13 +1,16 @@
+import os
+
+import pandas as pd
 import streamlit as st
 import xarray as xr
-import pandas as pd
-import os
 
 st.set_page_config(layout="wide")
 
 FINAL_STACK_PATH = "dataset/final_feature_stack.nc"
 FINAL_STACK_PATH1 = "dataset/final_feature_stack1.nc"
 FINAL_STACK_PATH2 = "dataset/final_feature_stack2.nc"
+FINAL_MASTER_PATH = "dataset/final_feature_stack_MASTER.nc"
+
 MODIS_OG = "dataset/MODIS/modis_2016_India.csv"
 MODIS_FINAL = "dataset/MODIS/final-modis.csv"
 ERA5_PATH = "dataset/ERA5-Land/era5-april/data_0.nc"
@@ -36,38 +39,39 @@ def safe_xarray_head(
         return pd.DataFrame(
             {
                 "Error": [
-                    f"Could not safely load final stack: {e}. Check file path/integrity."
+                    f"Could not safely load xarray data: {e}. Check file path/integrity."
                 ]
             }
         )
 
 
+st.title("Forest Fire Project Diagnostics")
 st.caption("Showing diagnostic sample slices only, to avoid memory overload.")
 st.divider()
 
-
-st.subheader("1. Final Feature Stack (1km Fused Data)")
+st.subheader("0. Final MASTER Feature Stack (Intersection Crop)")
 st.caption(
-    f"Showing the first 5 time steps (rows) and first 5x5 pixels (columns) from: {FINAL_STACK_PATH}"
+    f"This is the production-ready dataset with zero edge padding: {FINAL_MASTER_PATH}"
 )
+df_master = safe_xarray_head(FINAL_MASTER_PATH)
+st.dataframe(df_master)
 
-df_final_stack_head = safe_xarray_head(FINAL_STACK_PATH)
-st.dataframe(df_final_stack_head)
+st.divider()
 
+st.subheader("1. Previous Iterations (Diagnostic History)")
+col1, col2, col3 = st.columns(3)
 
-st.caption(
-    f"Showing the first 5 time steps (rows) and first 5x5 pixels (columns) from: {FINAL_STACK_PATH1}"
-)
+with col1:
+    st.caption(f"Stack V0: {FINAL_STACK_PATH}")
+    st.dataframe(safe_xarray_head(FINAL_STACK_PATH))
 
-df_final_stack_head = safe_xarray_head(FINAL_STACK_PATH1)
-st.dataframe(df_final_stack_head)
+with col2:
+    st.caption(f"Stack V1: {FINAL_STACK_PATH1}")
+    st.dataframe(safe_xarray_head(FINAL_STACK_PATH1))
 
-st.caption(
-    f"Showing the first 5 time steps (rows) and first 5x5 pixels (columns) from: {FINAL_STACK_PATH1}"
-)
-
-df_final_stack_head = safe_xarray_head(FINAL_STACK_PATH2)
-st.dataframe(df_final_stack_head)
+with col3:
+    st.caption(f"Stack V2: {FINAL_STACK_PATH2}")
+    st.dataframe(safe_xarray_head(FINAL_STACK_PATH2))
 
 st.divider()
 st.subheader("2. Raster Visualizations & Input Data Heads")
@@ -97,14 +101,12 @@ st.subheader("Original ERA5-Land")
 st.caption(
     f"Showing the first 5 time steps (rows) and first 5x5 pixels (columns) from: {ERA5_PATH}"
 )
-
 df_era5 = safe_xarray_head(ERA5_PATH)
 st.dataframe(df_era5)
 
-st.subheader("Final ERA5-Land")
+st.subheader("Final ERA5-Land (Rechunked)")
 st.caption(
-    f"Showing the first 5 time steps (rows) and first 5x5 pixels (columns) from: {ERA5_PATH}"
+    f"Showing the first 5 time steps (rows) and first 5x5 pixels (columns) from: {ERA5_PATH_RE}"
 )
-
 df_era5_final = safe_xarray_head(ERA5_PATH_RE)
 st.dataframe(df_era5_final)
