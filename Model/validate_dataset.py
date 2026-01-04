@@ -3,7 +3,7 @@ import xarray as xr
 
 # FILE_PATH = "dataset/final_feature_stack.nc"
 # FILE_PATH = "dataset/final_feature_stack1.nc"
-FILE_PATH = "dataset/final_feature_stack2.nc"
+FILE_PATH = "dataset/final_feature_stack_MASTER.nc"
 
 
 def validate_dataset(path):

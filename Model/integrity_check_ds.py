@@ -5,7 +5,7 @@ import xarray as xr
 from pyproj import Transformer
 
 # --- Paths ---
-STACK_PATH = "dataset/final_feature_stack2.nc"
+STACK_PATH = "dataset/final_feature_stack_MASTER.nc"
 SOURCE_FILES = {
     "DEM": "dataset/DEM/merged_dem.tif",
     "LULC": "dataset/LULC/UK_LULC50K_2016.tif",
