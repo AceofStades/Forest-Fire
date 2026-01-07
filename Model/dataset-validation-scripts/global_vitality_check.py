@@ -3,7 +3,7 @@ import xarray as xr
 
 # --- Configuration ---
 # Path lil dataset l-master
-FILE_PATH = "dataset/final_feature_stack_MASTER.nc"
+FILE_PATH = "../dataset/final_feature_stack_MASTER.nc"
 
 
 def check_global_vitality():
