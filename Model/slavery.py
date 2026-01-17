@@ -32,9 +32,38 @@ def sample_raster_neighbor(path, lat, lon):
     try:
         with rasterio.open(path) as src:
             row, col = rowcol(src.transform, lon, lat)
-            # We take a 3x3 window around the original source
             window = src.read(1)[max(0, row - 1) : row + 2, max(0, col - 1) : col + 2]
             return np.nanmin(window), np.nanmax(window), src.read(1)[row, col]
+    except:
+        return np.nan, np.nan, np.nan
+
+
+def sample_era5_neighbor(ds, lat, lon, var_name):
+    try:
+        # Find nearest indices in source ERA5
+        lat_idx = np.abs(ds.latitude.values - lat).argmin()
+        lon_idx = np.abs(ds.longitude.values - lon).argmin()
+
+        # Take 3x3 window around source
+        window = (
+            ds[var_name]
+            .isel(
+                valid_time=0,
+                latitude=slice(max(0, lat_idx - 1), lat_idx + 2),
+                longitude=slice(max(0, lon_idx - 1), lon_idx + 2),
+            )
+            .compute()
+        )
+
+        v_min, v_max = window.min().values, window.max().values
+        v_near = (
+            ds[var_name]
+            .sel(latitude=lat, longitude=lon, method="nearest")
+            .isel(valid_time=0)
+            .values
+        )
+
+        return float(v_min), float(v_max), float(v_near)
     except:
         return np.nan, np.nan, np.nan
 
@@ -48,10 +77,7 @@ col_map, col_data = st.columns([1, 1.2])
 
 with col_map:
     st.subheader("Master Grid Selection")
-    m = folium.Map(
-        location=[lat, lon] if "lat" in locals() else [lats.mean(), lons.mean()],
-        zoom_start=10,
-    )
+    m = folium.Map(location=[lats.mean(), lons.mean()], zoom_start=8)
     folium.Rectangle(
         bounds=[[lats.min(), lons.min()], [lats.max(), lons.max()]],
         color="red",
@@ -72,31 +98,32 @@ if click_data.get("last_clicked"):
             .isel(valid_time=0)
             .compute()
         )
-        pixel_era5 = (
-            era5_ds.sel(latitude=lat, longitude=lon, method="nearest")
-            .isel(valid_time=0)
-            .compute()
-        )
 
         tally_data = []
 
-        # ERA5 Check
+        # 1. ERA5 Weather Variables Debug
         for v in era5_ds.data_vars:
+            s_min, s_max, s_near = sample_era5_neighbor(era5_ds, lat, lon, v)
+            m_val = float(pixel_master[v].values)
+
+            # Use wider tolerance for weather due to bilinear interpolation across 9km
+            within_range = m_val >= s_min - 1e-4 and m_val <= s_max + 1e-4
+            status = "✅ Local Match" if within_range else "❌ Out of Bounds"
+
             tally_data.append(
                 {
                     "Variable": v,
-                    "Master Value": f"{pixel_master[v].values:.4f}",
-                    "Source (Nearest)": f"{pixel_era5[v].values:.4f}",
-                    "Note": "Interpolated",
+                    "Master (1km)": f"{m_val:.4f}",
+                    "Source Range (9km 3x3)": f"[{s_min:.4f} to {s_max:.4f}]",
+                    "Status": status,
                 }
             )
 
-        # Static Check with Neighborhood Debug
+        # 2. Static Terrain/Land Variables Debug
         for name, path in STATIC_SOURCES.items():
             s_min, s_max, s_near = sample_raster_neighbor(path, lat, lon)
-            m_val = pixel_master[name].values
+            m_val = float(pixel_master[name].values)
 
-            # If Master is within the range of original neighbors, it's correct!
             status = (
                 "✅ Local Match"
                 if (m_val >= s_min and m_val <= s_max)
@@ -110,8 +137,7 @@ if click_data.get("last_clicked"):
             tally_data.append(
                 {
                     "Variable": name,
-                    "Master Value": f"{m_val:.2f}",
-                    "Source (Nearest)": f"{s_near:.2f}",
+                    "Master (1km)": f"{m_val:.2f}",
                     "Source Range (3x3)": f"[{s_min:.1f} to {s_max:.1f}]",
                     "Status": status,
                 }
@@ -119,5 +145,5 @@ if click_data.get("last_clicked"):
 
         st.table(pd.DataFrame(tally_data))
         st.warning(
-            "**Diagnostic:** If 'Master Value' is inside the 'Source Range (3x3)', the data is accurate. It just means the 1km grid center doesn't align perfectly with the original sensor pixel."
+            "If the Master value is within the Source Range, the interpolation is accurate. In regions with high gradients (like mountain peaks or front lines), the 1km value is a weighted average of the 9km surroundings."
         )
