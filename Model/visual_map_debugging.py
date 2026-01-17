@@ -23,6 +23,7 @@ MODIS_CSV = "dataset/MODIS/final-modis.csv"
 
 @st.cache_resource
 def load_datasets():
+    # Use h5netcdf for stability on large files
     master = xr.open_dataset(MASTER_PATH, engine="h5netcdf", chunks={})
     era5 = xr.open_dataset(ERA5_SOURCE_PATH, engine="h5netcdf", chunks={})
     return master, era5
@@ -40,11 +41,8 @@ def sample_raster_neighbor(path, lat, lon):
 
 def sample_era5_neighbor(ds, lat, lon, var_name):
     try:
-        # Find nearest indices in source ERA5
         lat_idx = np.abs(ds.latitude.values - lat).argmin()
         lon_idx = np.abs(ds.longitude.values - lon).argmin()
-
-        # Take 3x3 window around source
         window = (
             ds[var_name]
             .isel(
@@ -54,7 +52,6 @@ def sample_era5_neighbor(ds, lat, lon, var_name):
             )
             .compute()
         )
-
         v_min, v_max = window.min().values, window.max().values
         v_near = (
             ds[var_name]
@@ -62,13 +59,12 @@ def sample_era5_neighbor(ds, lat, lon, var_name):
             .isel(valid_time=0)
             .values
         )
-
         return float(v_min), float(v_max), float(v_near)
     except:
         return np.nan, np.nan, np.nan
 
 
-st.title("Final Master Dataset Tally Tool (Spatial Debugger)")
+st.title("Final Master Dataset Tally Tool")
 
 master_ds, era5_ds = load_datasets()
 lats, lons = master_ds.latitude.values, master_ds.longitude.values
@@ -77,6 +73,7 @@ col_map, col_data = st.columns([1, 1.2])
 
 with col_map:
     st.subheader("Master Grid Selection")
+    # Default to center of dataset
     m = folium.Map(location=[lats.mean(), lons.mean()], zoom_start=8)
     folium.Rectangle(
         bounds=[[lats.min(), lons.min()], [lats.max(), lons.max()]],
@@ -93,6 +90,7 @@ if click_data.get("last_clicked"):
     with col_data:
         st.subheader(f"Results for: {lat:.4f}, {lon:.4f}")
 
+        # Pull data from the Master 1km Stack
         pixel_master = (
             master_ds.sel(latitude=lat, longitude=lon, method="nearest")
             .isel(valid_time=0)
@@ -101,12 +99,10 @@ if click_data.get("last_clicked"):
 
         tally_data = []
 
-        # 1. ERA5 Weather Variables Debug
+        # 1. ERA5 Comparison with 9km Neighborhood Debug
         for v in era5_ds.data_vars:
             s_min, s_max, s_near = sample_era5_neighbor(era5_ds, lat, lon, v)
             m_val = float(pixel_master[v].values)
-
-            # Use wider tolerance for weather due to bilinear interpolation across 9km
             within_range = m_val >= s_min - 1e-4 and m_val <= s_max + 1e-4
             status = "✅ Local Match" if within_range else "❌ Out of Bounds"
 
@@ -119,7 +115,7 @@ if click_data.get("last_clicked"):
                 }
             )
 
-        # 2. Static Terrain/Land Variables Debug
+        # 2. Static Comparison (DEM, LULC, GHS)
         for name, path in STATIC_SOURCES.items():
             s_min, s_max, s_near = sample_raster_neighbor(path, lat, lon)
             m_val = float(pixel_master[name].values)
@@ -144,6 +140,35 @@ if click_data.get("last_clicked"):
             )
 
         st.table(pd.DataFrame(tally_data))
+
+        # 3. MODIS Proximity Search
+        st.divider()
+        st.subheader("Nearest MODIS Fire Events (CSV Ground Truth)")
+        if os.path.exists(MODIS_CSV):
+            df_modis = pd.read_csv(MODIS_CSV)
+            # Simple Euclidean distance for proximity check
+            df_modis["dist"] = np.sqrt(
+                (df_modis["latitude"] - lat) ** 2 + (df_modis["longitude"] - lon) ** 2
+            )
+            nearby_fires = df_modis.nsmallest(5, "dist")[
+                ["acq_date", "latitude", "longitude", "confidence", "dist"]
+            ]
+            st.dataframe(nearby_fires)
+
+            # Highlight if the current Master cell shows fire
+            m_fire = float(pixel_master["MODIS_FIRE_T1"].values)
+            if m_fire > 0:
+                st.success(
+                    f"Confirmed: Master Stack shows FIRE (1.0) at this coordinate."
+                )
+            else:
+                st.info("Master Stack shows NO FIRE (0.0) at this coordinate.")
+        else:
+            st.error("MODIS CSV not found for proximity check.")
+
         st.warning(
-            "If the Master value is within the Source Range, the interpolation is accurate. In regions with high gradients (like mountain peaks or front lines), the 1km value is a weighted average of the 9km surroundings."
+            "Diagnostic: If the Master value is within the Source Range, the interpolation is accurate."
         )
+else:
+    with col_data:
+        st.info("Click a point on the map to begin the spatial audit.")
