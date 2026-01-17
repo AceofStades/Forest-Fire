@@ -4,7 +4,7 @@ import xarray as xr
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
 
-INPUT_NC_PATH = "dataset/final_feature_stack3.nc"
+INPUT_NC_PATH = "dataset/final_feature_stack_MASTER.nc"
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 BATCH_SIZE = 4
