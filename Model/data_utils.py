@@ -1,80 +1,127 @@
+import os
+import pickle
+
 import numpy as np
 import torch
+import torch.nn.functional as F
 import xarray as xr
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
 
+# --- CONFIGURATION ---
 INPUT_NC_PATH = "dataset/final_feature_stack_MASTER.nc"
-TEST_SIZE = 0.2
-RANDOM_STATE = 42
-BATCH_SIZE = 4
+CACHE_PATH = "stats_cache.pkl"
 
 
 class FireDataset(Dataset):
-    def __init__(self, X, Y):
-        self.X = X
-        self.Y = Y
+    def __init__(self, loaded_ds, indices, stats, feature_vars):
+        self.ds = loaded_ds
+        self.indices = indices
+        self.stats = stats
+        self.feature_vars = feature_vars
 
     def __len__(self):
-        return len(self.X)
+        return len(self.indices)
 
     def __getitem__(self, idx):
-        return self.X[idx], self.Y[idx]
+        t_idx = self.indices[idx]
+
+        # 1. Access Data from RAM
+        X_data = (
+            self.ds[self.feature_vars]
+            .isel(valid_time=t_idx)
+            .to_array(dim="channel")
+            .values
+        )
+        Y_data = self.ds["MODIS_FIRE_T1"].isel(valid_time=t_idx + 1).values
+
+        # 2. Vectorized Normalization (Prevent float64 promotion)
+        min_v = self.stats["min"][:, None, None]
+        max_v = self.stats["max"][:, None, None]
+
+        # Cast epsilon to float32 to keep everything in 32-bit
+        denominator = max_v - min_v + np.float32(1e-6)
+        X_norm = (X_data - min_v) / denominator
+
+        # 3. Convert to Tensor
+        X_tensor = torch.from_numpy(X_norm).float()
+        Y_tensor = torch.from_numpy(Y_data).float().unsqueeze(0)
+
+        # 4. PAD to be divisible by 16 (Fixes the U-Net Crash)
+        # We calculate how much padding we need for Height and Width
+        _, h, w = X_tensor.shape
+        pad_h = (16 - h % 16) % 16
+        pad_w = (16 - w % 16) % 16
+
+        if pad_h > 0 or pad_w > 0:
+            # Pad (Left, Right, Top, Bottom)
+            X_tensor = F.pad(X_tensor, (0, pad_w, 0, pad_h))
+            Y_tensor = F.pad(Y_tensor, (0, pad_w, 0, pad_h))
+
+        return X_tensor, Y_tensor
 
 
-def load_split_data(
-    input_path=INPUT_NC_PATH,
-    test_size=TEST_SIZE,
-    random_state=RANDOM_STATE,
-    batch_size=BATCH_SIZE,
-):
-    print(f"Loading data from {input_path}...")
-    ds = xr.open_dataset(input_path)
+def compute_global_stats(ds_loaded, feature_vars):
+    if os.path.exists(CACHE_PATH):
+        print(f"--- Loading cached stats from {CACHE_PATH} ---")
+        with open(CACHE_PATH, "rb") as f:
+            return pickle.load(f)
 
-    feature_vars = [v for v in ds.data_vars if v not in ["MODIS_FIRE_T1"]]
+    print("--- Computing stats on RAM resident data ---")
+    num_channels = len(feature_vars)
+    mins = np.zeros(num_channels)
+    maxs = np.zeros(num_channels)
 
-    # Temporal Shift: Features from Day t predict fire from Day t + 1
-    # We rely on 'valid_time' being the time coordinate
-    time_dim_name = "valid_time"
+    for i, var in enumerate(tqdm(feature_vars, desc="Analyzing Channels")):
+        data = ds_loaded[var].values
+        mins[i] = np.nanmin(data)
+        maxs[i] = np.nanmax(data)
 
-    modis_target = ds["MODIS_FIRE_T1"].shift(**{time_dim_name: -1})
-    Y_labels = modis_target.isel(**{time_dim_name: slice(0, -1)}).values
-    X_features = ds[feature_vars].isel(**{time_dim_name: slice(0, -1)})
+    stats = {"min": mins.astype(np.float32), "max": maxs.astype(np.float32)}
 
-    # Convert to Tensors and Normalize
-    X_data = (
-        X_features.to_array(dim="channel")
-        # Transpose to PyTorch standard: (Sample, Channel, Latitude, Longitude)
-        .transpose(time_dim_name, "channel", "latitude", "longitude")
-        .values
-    )
+    with open(CACHE_PATH, "wb") as f:
+        pickle.dump(stats, f)
 
-    # Min-Max Normalization: Applied per-channel across all time and space
-    X_data_min = X_data.min(axis=(0, 2, 3), keepdims=True)
-    X_data_max = X_data.max(axis=(0, 2, 3), keepdims=True)
-    X_data_norm = (X_data - X_data_min) / (X_data_max - X_data_min + 1e-6)
+    return stats
 
-    X_data_tensor = torch.tensor(X_data_norm, dtype=torch.float32)
-    Y_labels_tensor = torch.tensor(Y_labels, dtype=torch.float32).unsqueeze(1)
 
-    print("Total time steps available for training: ", X_data_tensor.shape[0])
-    print("Number of feature channels: ", X_data_tensor.shape[1])
+def load_split_data(batch_size=32):
+    print(f"--- Loading entire dataset into RAM ({INPUT_NC_PATH}) ---")
 
-    # Split:
-    X_train, X_val, Y_train, Y_val = train_test_split(
-        X_data_tensor,
-        Y_labels_tensor,
-        test_size=test_size,
-        random_state=random_state,
-        shuffle=False,
-    )
+    with xr.open_dataset(INPUT_NC_PATH, engine="h5netcdf", chunks=None) as ds:
+        ds_loaded = ds.load()  # Force load to RAM
+        feature_vars = [v for v in ds.data_vars if v != "MODIS_FIRE_T1"]
+        total_steps = ds.sizes["valid_time"]
 
-    # DataLoaders
+    print("--- Dataset Loaded into RAM ---")
+
+    stats = compute_global_stats(ds_loaded, feature_vars)
+
+    indices = np.arange(total_steps - 1)
+    train_idx, val_idx = train_test_split(indices, test_size=0.2, shuffle=False)
+
+    train_ds = FireDataset(ds_loaded, train_idx, stats, feature_vars)
+    val_ds = FireDataset(ds_loaded, val_idx, stats, feature_vars)
+
     train_loader = DataLoader(
-        FireDataset(X_train, Y_train), batch_size=batch_size, shuffle=True
-    )
-    val_loader = DataLoader(
-        FireDataset(X_val, Y_val), batch_size=batch_size, shuffle=False
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=8,
+        pin_memory=True,
+        prefetch_factor=4,
+        persistent_workers=True,
     )
 
-    return train_loader, val_loader, X_train.shape[1]
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=8,
+        pin_memory=True,
+        prefetch_factor=2,
+        persistent_workers=True,
+    )
+
+    return train_loader, val_loader, len(feature_vars)
