@@ -24,7 +24,7 @@ def train_and_save():
     if torch.cuda.is_available():
         DEVICE = torch.device("cuda")
     else:
-        print("⚠️ CUDA not found. Training on CPU will be slow.")
+        print("CUDA not found. Training on CPU will be slow.")
         DEVICE = torch.device("cpu")
     print(f"Training on device: {DEVICE}")
 
