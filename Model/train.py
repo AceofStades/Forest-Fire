@@ -35,7 +35,7 @@ def train_and_save():
     model = UNet(in_channels=input_channels, out_channels=1).to(DEVICE)
 
     # Loss & Optimizer
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([50.0]).to(DEVICE))
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([10.0]).to(DEVICE))
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     # Mixed Precision Scaler
