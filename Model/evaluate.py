@@ -1,9 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 import torch
 from data_utils import load_split_data
-from sklearn.metrics import auc, confusion_matrix, precision_recall_curve, roc_curve
+from sklearn.metrics import auc, precision_recall_curve, roc_curve
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from unet_model import UNet
@@ -17,6 +16,7 @@ def calculate_metrics(pred_prob, target, threshold=0.5):
     """Calculates IoU, Dice, Precision, Recall for a batch."""
     pred_bin = (pred_prob > threshold).float()
 
+    # Flatten for calculation
     pred_flat = pred_bin.view(-1)
     target_flat = target.view(-1)
 
@@ -55,31 +55,61 @@ def evaluate():
     total_recall = 0
     num_batches = 0
 
-    all_targets = []
-    all_probs = []
-
     print("Running evaluation loop...")
+    all_probs_list = []
+    all_targets_list = []
+
     with torch.no_grad():
         for inputs, targets in tqdm(val_loader, desc="Evaluating"):
             inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
-
             logits = model(inputs)
             probs = torch.sigmoid(logits)
 
-            iou, dice, prec, rec = calculate_metrics(probs, targets)
-
+            # 1. Standard Metrics (Threshold 0.5)
+            iou, dice, prec, rec = calculate_metrics(probs, targets, threshold=0.5)
             total_iou += iou
             total_dice += dice
             total_prec += prec
             total_recall += rec
             num_batches += 1
 
-            if len(all_targets) < 1000000:
-                all_targets.extend(targets.cpu().numpy().flatten()[::100])
-                all_probs.extend(probs.cpu().numpy().flatten()[::100])
+            # 2. Store Data (CPU side)
+            # We must flatten here or later. Storing flat saves RAM immediately.
+            # Downsample: Taking every 100th pixel is enough for a smooth curve
+            # and prevents RAM explosion.
+            all_probs_list.append(probs.cpu().view(-1)[::100])
+            all_targets_list.append(targets.cpu().view(-1)[::100])
+
+    # Combine into one massive 1D array
+    all_probs = torch.cat(all_probs_list)
+    all_targets = torch.cat(all_targets_list)
+
+    print("\n--- Threshold Sweep ---")
+    print(f"{'Threshold':<10} | {'IoU':<10} | {'Precision':<10} | {'Recall':<10}")
+    print("-" * 46)
+
+    # We need full data for the sweep, but since we downsampled for plots,
+    # the metrics below are strictly for the downsampled population (approximate but accurate enough).
+    for thresh in [0.5, 0.6, 0.7, 0.75, 0.8]:
+        pred_bin = (all_probs > thresh).float()
+
+        tp = (pred_bin * all_targets).sum().item()
+        fp = (pred_bin * (1 - all_targets)).sum().item()
+        fn = ((1 - pred_bin) * all_targets).sum().item()
+
+        epsilon = 1e-6
+        iou = tp / (tp + fp + fn + epsilon)
+        precision = tp / (tp + fp + epsilon)
+        recall = tp / (tp + fn + epsilon)
+
+        print(f"{thresh:<10.2f} | {iou:<10.4f} | {precision:<10.4f} | {recall:<10.4f}")
+
+    if num_batches == 0:
+        print("Error: No batches processed.")
+        return
 
     print("\n" + "=" * 30)
-    print("FINAL EVALUATION RESULTS")
+    print("FINAL EVALUATION RESULTS (Thresh=0.5)")
     print("=" * 30)
     print(f"IoU (Jaccard):    {total_iou / num_batches:.4f}")
     print(f"Dice (F1 Score):  {total_dice / num_batches:.4f}")
@@ -87,12 +117,16 @@ def evaluate():
     print(f"Recall:           {total_recall / num_batches:.4f}")
     print("=" * 30)
 
-    all_targets = np.array(all_targets)
-    all_probs = np.array(all_probs)
+    # --- PLOTTING ---
+    # Convert to Numpy for Scikit-Learn
+    # .flatten() ensures 1D array, though .view(-1) above usually handles it.
+    all_targets_np = all_targets.numpy().flatten()
+    all_probs_np = all_probs.numpy().flatten()
 
     plt.figure(figsize=(12, 5))
 
-    fpr, tpr, _ = roc_curve(all_targets, all_probs)
+    # ROC Curve
+    fpr, tpr, _ = roc_curve(all_targets_np, all_probs_np)
     roc_auc = auc(fpr, tpr)
 
     plt.subplot(1, 2, 1)
@@ -105,7 +139,8 @@ def evaluate():
     plt.title("Receiver Operating Characteristic (ROC)")
     plt.legend(loc="lower right")
 
-    precision, recall, _ = precision_recall_curve(all_targets, all_probs)
+    # Precision-Recall Curve
+    precision, recall, _ = precision_recall_curve(all_targets_np, all_probs_np)
 
     plt.subplot(1, 2, 2)
     plt.plot(recall, precision, color="blue", lw=2)
