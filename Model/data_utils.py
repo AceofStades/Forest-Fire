@@ -27,7 +27,6 @@ class FireDataset(Dataset):
     def __getitem__(self, idx):
         t_idx = self.indices[idx]
 
-        # 1. Access Data from RAM
         X_data = (
             self.ds[self.feature_vars]
             .isel(valid_time=t_idx)
@@ -36,26 +35,25 @@ class FireDataset(Dataset):
         )
         Y_data = self.ds["MODIS_FIRE_T1"].isel(valid_time=t_idx + 1).values
 
-        # 2. Vectorized Normalization (Prevent float64 promotion)
+        # Robust Normalization with Clipping
         min_v = self.stats["min"][:, None, None]
         max_v = self.stats["max"][:, None, None]
 
-        # Cast epsilon to float32 to keep everything in 32-bit
+        # Clip values to the calculated range first
+        X_data = np.clip(X_data, min_v, max_v)
+
         denominator = max_v - min_v + np.float32(1e-6)
         X_norm = (X_data - min_v) / denominator
 
-        # 3. Convert to Tensor
+        # Pad to 320x400
         X_tensor = torch.from_numpy(X_norm).float()
         Y_tensor = torch.from_numpy(Y_data).float().unsqueeze(0)
 
-        # 4. PAD to be divisible by 16 (Fixes the U-Net Crash)
-        # We calculate how much padding we need for Height and Width
         _, h, w = X_tensor.shape
         pad_h = (16 - h % 16) % 16
         pad_w = (16 - w % 16) % 16
 
         if pad_h > 0 or pad_w > 0:
-            # Pad (Left, Right, Top, Bottom)
             X_tensor = F.pad(X_tensor, (0, pad_w, 0, pad_h))
             Y_tensor = F.pad(Y_tensor, (0, pad_w, 0, pad_h))
 
@@ -68,15 +66,15 @@ def compute_global_stats(ds_loaded, feature_vars):
         with open(CACHE_PATH, "rb") as f:
             return pickle.load(f)
 
-    print("--- Computing stats on RAM resident data ---")
+    print("--- Computing Robust Stats (2nd/98th Percentiles) ---")
     num_channels = len(feature_vars)
     mins = np.zeros(num_channels)
     maxs = np.zeros(num_channels)
 
     for i, var in enumerate(tqdm(feature_vars, desc="Analyzing Channels")):
         data = ds_loaded[var].values
-        mins[i] = np.nanmin(data)
-        maxs[i] = np.nanmax(data)
+        mins[i] = np.nanpercentile(data, 2)
+        maxs[i] = np.nanpercentile(data, 98)
 
     stats = {"min": mins.astype(np.float32), "max": maxs.astype(np.float32)}
 
