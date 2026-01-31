@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Navigation } from "@/components/navigation"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
+import SimulationCanvas from "./SimulationCanvas"
+import RealTimeMap from "@/components/ui/RealTimeMap"
 
 function mulberry32(a: number) {
   return () => {
@@ -447,6 +449,55 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const [grid, setGrid] = useState<number[][] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const getGrid = async () => {
+      try {
+        const response = await fetch('http://127.0.0.1:8000/fire-grid');
+        if (!response.ok) throw new Error("Failed to fetch fire grid");
+
+        const data = await response.json();
+        setGrid(data.grid);
+      } catch (err) {
+        console.error(err);
+        setError("Could not connect to the backend server.");
+      }
+    };
+
+    getGrid();
+  }, []);
+  const fetchGrid = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/fire-grid');
+      const data = await res.json();
+      setGrid(data.grid);
+    } catch (e) { console.error("Connection Error", e); }
+  };
+
+  // Initial Load
+  useEffect(() => { fetchGrid(); }, []);
+
+  // Update Simulation on Backend
+  const applyDynamics = async () => {
+    try {
+      await fetch('http://127.0.0.1:8000/update-simulation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wind_speed: windSpeed[0],
+          wind_direction: windDir,
+          humidity: humidity[0]
+        })
+      });
+      // Re-fetch grid to see changes visually
+      fetchGrid();
+    } catch (e) { console.error("Failed to update dynamics", e); }
+  };
+
+
+
   return (
     <main className="min-h-screen bg-background text-foreground">
       <Navigation />
@@ -487,12 +538,12 @@ export default function Page() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label htmlFor="windSpeed">Wind speed (m/s)</Label>
+                  <Label htmlFor="windSpeed">Wind speed (km/h)</Label>
                   <Input
                     id="windSpeed"
                     type="number"
                     min={0}
-                    max={40}
+                    max={100}
                     step={1}
                     value={windSpeed}
                     onChange={(e) => setWindSpeed(Number(e.target.value))}
@@ -600,11 +651,14 @@ export default function Page() {
             </CardHeader>
             <CardContent>
               <div className="flex flex-col items-start gap-3">
-                <canvas
-                  ref={canvasRef}
-                  className="border rounded-md border-muted-foreground/30"
-                  style={{ imageRendering: "pixelated" as any }}
-                />
+                {/* <div className="flex flex-col items-center">
+                  {grid ? (
+                    <SimulationCanvas probGrid={grid} />
+                  ) : (
+                    <div className="text-slate-400 animate-pulse">Loading Model Grid...</div>
+                  )}
+                </div> */}
+                <RealTimeMap />
                 <div className="text-xs text-muted-foreground">Green=Unburnt, Orange=Burning, Gray=Burnt</div>
               </div>
             </CardContent>

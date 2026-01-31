@@ -4,7 +4,7 @@ import { MapContainer, TileLayer, Polyline, Marker, Popup, useMapEvents } from '
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
-import { gridToGPS, gpsToGrid, getMapBounds } from '@/lib/geoUtils';
+import { gridToGPS, gpsToGrid, getMapBounds } from '../../lib/geoUtils';
 import FireOverlay from './FireOverlay';
 
 // Fix Leaflet Marker Icons in Next.js
@@ -77,9 +77,9 @@ export default function RealTimeMap() {
         style={{ height: '100%', width: '100%' }}
         maxBounds={mapBounds}
       >
-        <TileLayer 
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" 
-          attribution='&copy; OpenStreetMap &copy; CARTO'
+       <TileLayer 
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" 
+          attribution='&copy; OpenStreetMap contributors'
         />
         
         {/* Fire Simulation Overlay */}
