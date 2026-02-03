@@ -53,7 +53,7 @@ train_loader, val_loader, in_dims = load_hybrid_data(
 )
 
 model = HybridConvLSTMUNet(in_dims).cuda()
-optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
 # POS_WEIGHT needs to be consistent with AMP (handled automatically usually, but good to check)
 bce_criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([POS_WEIGHT]).cuda())
 scaler = GradScaler()  # Initialize Mixed Precision Scaler
