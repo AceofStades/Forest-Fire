@@ -1,204 +1,107 @@
 import os
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F  # <--- THIS WAS MISSING
-import torch.optim as optim
-from data_utils import load_split_data
+
+# Import from our clean package
+from src.dataset import get_dataloaders
+from src.models import UNet
+from src.utils import compute_metrics, dice_loss
+from torch.amp import GradScaler, autocast
 from tqdm import tqdm
-from unet_model import UNet
 
-# CONFIG
-MODEL_SAVE_PATH = "best_fire_unet.pth"
-SAMPLE_OUTPUT_PATH = "simulation_input/fire_prediction_sample.npy"
-VISUALIZATION_PATH = "simulation_input/prediction_visual.png"
-NUM_EPOCHS = 25
-LEARNING_RATE = 1e-3  # High LR to kickstart training
+# --- CONFIGURATION ---
+SEQ_LEN = 3
+LEAD_TIME = 8  # 24 hours
+BATCH_SIZE = 32
+EPOCHS = 50
+LR = 1e-4
+WEIGHT_DECAY = 1e-4
+POS_WEIGHT = 5.0
 
-# --- MEMORY OPTIMIZATION ---
-BATCH_SIZE = 8  # Fits in VRAM
-ACCUMULATION_STEPS = 4  # Effective Batch Size = 32
+# Updated path
+SAVE_DIR = "weights"
+SAVE_PATH = os.path.join(SAVE_DIR, "best_unet.pth")
 
 
-class DiceLoss(nn.Module):
-    def __init__(self, smooth=1.0):
-        super(DiceLoss, self).__init__()
-        self.smooth = smooth
+def main():
+    # 1. Setup Data
+    # This handles Spatial Split + Time Stacking automatically
+    train_loader, val_loader, in_channels = get_dataloaders(
+        BATCH_SIZE, SEQ_LEN, LEAD_TIME
+    )
+    print(f"Model Input Channels: {in_channels}")
 
-    def forward(self, logits, targets):
-        # Activate logits to get probabilities (0 to 1)
-        probs = torch.sigmoid(logits)
+    # 2. Setup Model
+    model = UNet(n_channels=in_channels, n_classes=1).cuda()
 
-        # Flatten label and prediction tensors
-        probs = probs.view(-1)
-        targets = targets.view(-1)
+    # 3. Optimization
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", patience=5, factor=0.5, verbose=True
+    )
+    criterion_bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([POS_WEIGHT]).cuda())
+    scaler = GradScaler("cuda")
 
-        # Calculate Dice Coefficient
-        intersection = (probs * targets).sum()
-        dice = (2.0 * intersection + self.smooth) / (
-            probs.sum() + targets.sum() + self.smooth
+    best_iou = 0.0
+    os.makedirs(SAVE_DIR, exist_ok=True)
+
+    print(f"\nStarting Training... Saving to {SAVE_PATH}")
+
+    for epoch in range(EPOCHS):
+        # --- TRAIN ---
+        model.train()
+        train_loss = 0
+        loop = tqdm(train_loader, desc=f"Ep {epoch + 1}/{EPOCHS} [Train]")
+
+        for x, y in loop:
+            x, y = x.cuda(non_blocking=True), y.cuda(non_blocking=True)
+            optimizer.zero_grad()
+
+            with autocast("cuda"):
+                pred = model(x)
+                loss = criterion_bce(pred, y) + dice_loss(pred, y)
+
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
+            train_loss += loss.item()
+            loop.set_postfix(loss=loss.item())
+
+        # --- VAL ---
+        model.eval()
+        val_iou = 0
+        val_rec = 0
+
+        with torch.no_grad():
+            for x, y in val_loader:
+                x, y = x.cuda(non_blocking=True), y.cuda(non_blocking=True)
+                with autocast("cuda"):
+                    pred = model(x)
+
+                iou, rec = compute_metrics(pred, y)
+                val_iou += iou
+                val_rec += rec
+
+        avg_loss = train_loss / len(train_loader)
+        avg_iou = val_iou / len(val_loader)
+        avg_rec = val_rec / len(val_loader)
+
+        scheduler.step(avg_iou)
+
+        print(
+            f"Summary: Loss {avg_loss:.4f} | Val IoU {avg_iou:.4f} | Val Rec {avg_rec:.4f}"
         )
 
-        # Return 1 - Dice (because we want to minimize loss, maximizing Dice)
-        return 1 - dice
+        if avg_iou > best_iou:
+            best_iou = avg_iou
+            torch.save(model.state_dict(), SAVE_PATH)
+            print(f"*** NEW RECORD! Model Saved ({best_iou:.4f}) ***")
 
-
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.8, gamma=2):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-
-    def forward(self, inputs, targets):
-        # We use BCEWithLogits underneath for numerical stability
-        bce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
-        pt = torch.exp(-bce_loss)  # pt is the probability of being correct
-
-        # Focal Loss Formula: -alpha * (1-pt)^gamma * log(pt)
-        focal_loss = self.alpha * (1 - pt) ** self.gamma * bce_loss
-        return focal_loss.mean()
-
-
-def train_and_save():
-    # Check for CUDA
-    if torch.cuda.is_available():
-        DEVICE = torch.device("cuda")
-        torch.backends.cudnn.benchmark = True
-        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-    else:
-        DEVICE = torch.device("cpu")
-
-    print(f"Training on device: {DEVICE}")
-    os.makedirs("simulation_input", exist_ok=True)
-
-    # Load Data
-    train_loader, val_loader, input_channels = load_split_data(batch_size=BATCH_SIZE)
-
-    model = UNet(in_channels=input_channels, out_channels=1).to(DEVICE)
-
-    # Use Focal Loss to handle the class imbalance intelligently
-    # criterion = FocalLoss(alpha=0.75, gamma=2).to(DEVICE)
-    criterion = DiceLoss().to(DEVICE)
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-
-    best_val_loss = float("inf")
-
-    print(
-        f"Starting training with Batch Size {BATCH_SIZE} x {ACCUMULATION_STEPS} Steps = Effective {BATCH_SIZE * ACCUMULATION_STEPS}"
-    )
-
-    for epoch in range(NUM_EPOCHS):
-        model.train()
-        train_loss = 0.0
-        optimizer.zero_grad()  # Initialize gradients
-
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{NUM_EPOCHS}", unit="batch")
-
-        for i, (inputs, labels) in enumerate(pbar):
-            inputs = inputs.to(DEVICE, non_blocking=True)
-            labels = labels.to(DEVICE, non_blocking=True)
-
-            if torch.isnan(inputs).any():
-                continue
-
-            # Forward Pass
-            outputs = model(inputs)
-
-            # --- SANITY CHECK (First batch of first epoch only) ---
-            if epoch == 0 and i == 0:
-                print("\n--- SANITY CHECK ---")
-                print(
-                    f"Input Range:   {inputs.min().item():.3f} to {inputs.max().item():.3f}"
-                )
-                print(
-                    f"Label Range:   {labels.min().item()} to {labels.max().item()} (Sum: {labels.sum().item()})"
-                )
-                probs = torch.sigmoid(outputs)
-                print(
-                    f"Init Predicts: {probs.min().item():.4f} to {probs.max().item():.4f} (Mean: {probs.mean().item():.4f})"
-                )
-                print("--------------------")
-            # ------------------------------------------------------
-
-            loss = criterion(outputs, labels)
-
-            # Normalize loss by accumulation steps
-            loss = loss / ACCUMULATION_STEPS
-            loss.backward()
-
-            # Step Optimizer only every 'ACCUMULATION_STEPS'
-            if (i + 1) % ACCUMULATION_STEPS == 0:
-                # Clip gradients to prevent explosion
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-                optimizer.step()
-                optimizer.zero_grad()
-
-            # Record the "real" loss (multiply back for display)
-            current_loss = loss.item() * ACCUMULATION_STEPS
-            train_loss += current_loss
-            pbar.set_postfix(loss=f"{current_loss:.4f}")
-
-        # Validation Loop
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for inputs, labels in val_loader:
-                inputs = inputs.to(DEVICE, non_blocking=True)
-                labels = labels.to(DEVICE, non_blocking=True)
-
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
-
-        avg_val_loss = val_loss / len(val_loader)
-        print(f"Val Loss: {avg_val_loss:.4f}")
-
-        if np.isnan(avg_val_loss):
-            print("Error: Validation loss became NaN. Stopping.")
-            break
-
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            torch.save(model.state_dict(), MODEL_SAVE_PATH)
-            print(">>> Model Saved!")
-
-    # --- VISUALIZATION ---
-    print("\nGenerating sample prediction...")
-    try:
-        model.load_state_dict(torch.load(MODEL_SAVE_PATH))
-    except:
-        print("Using current weights.")
-
-    model.eval()
-    sample_inputs, sample_labels = next(iter(val_loader))
-    sample_inputs = sample_inputs.to(DEVICE)
-
-    with torch.no_grad():
-        logits = model(sample_inputs)
-        probs = torch.sigmoid(logits)
-
-    prediction_np = probs[0, 0].float().cpu().numpy()
-    ground_truth_np = sample_labels[0, 0].float().cpu().numpy()
-
-    np.save(SAMPLE_OUTPUT_PATH, prediction_np)
-
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.title("Ground Truth")
-    plt.imshow(ground_truth_np, cmap="hot", interpolation="nearest")
-    plt.colorbar()
-
-    plt.subplot(1, 2, 2)
-    plt.title("Prediction")
-    plt.imshow(prediction_np, cmap="hot", interpolation="nearest")
-    plt.colorbar()
-
-    plt.savefig(VISUALIZATION_PATH)
-    print("Done.")
+        print("-" * 50)
 
 
 if __name__ == "__main__":
-    train_and_save()
+    main()
