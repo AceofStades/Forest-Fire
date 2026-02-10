@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 
 
 def dice_loss(pred, target, smooth=1e-6):
@@ -12,23 +11,29 @@ def dice_loss(pred, target, smooth=1e-6):
 
 def compute_metrics(pred, target, threshold=0.5):
     """
-    Computes IoU and Recall (Sensitivity).
-    'Active Recall' ignores images with no fire.
+    Returns: IoU, Recall, Accuracy
     """
     pred_bin = (torch.sigmoid(pred) > threshold).float()
 
+    # --- Intersection over Union (IoU) ---
     tp = (pred_bin * target).sum(dim=(1, 2, 3))
     fp = (pred_bin * (1 - target)).sum(dim=(1, 2, 3))
     fn = ((1 - pred_bin) * target).sum(dim=(1, 2, 3))
 
-    # Intersection over Union
     iou = (tp / (tp + fp + fn + 1e-6)).mean().item()
 
-    # Active Recall (Only for frames that actually have fire)
+    # --- Recall (Sensitivity) ---
+    # Only calculate for images that actually contain fire to avoid /0
     has_fire = target.sum(dim=(1, 2, 3)) > 0
     if has_fire.sum() > 0:
-        recall = (tp[has_fire] / (tp[has_fire] + fn[has_fire] + 1e-6)).mean().item()
+        rec = (tp[has_fire] / (tp[has_fire] + fn[has_fire] + 1e-6)).mean().item()
     else:
-        recall = 0.0
+        rec = 0.0
 
-    return iou, recall
+    # --- Pixel Accuracy ---
+    # (TP + TN) / Total
+    correct_pixels = (pred_bin == target).float().sum(dim=(1, 2, 3))
+    total_pixels = target.size(2) * target.size(3)  # H * W
+    acc = (correct_pixels / total_pixels).mean().item()
+
+    return iou, rec, acc
