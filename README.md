@@ -20,12 +20,11 @@
 
 **Forest-Fire** is an integrated platform designed to assist in wildfire management and prevention. By leveraging satellite data, deep learning (U-Net), and pathfinding algorithms (D* Lite), this tool provides actionable insights into fire spread and safe evacuation routes.
 
-The system consists of a robust **FastAPI** backend that serves predictions from a PyTorch-based model, and a modern **Next.js** frontend that visualizes data in 3D, offers simulation controls, and provides an interactive dashboard for decision-makers.
+The system consists of a robust **FastAPI** backend that serves predictions from a PyTorch-based model, and a modern **Next.js** frontend that visualizes data in 2D, offers simulation controls, and provides an interactive dashboard for decision-makers.
 
 ## Key Features
 
 *   **Deep Learning Predictions:** Utilizes a U-Net architecture to predict fire spread probability based on environmental factors (temperature, humidity, wind, rain).
-*   **3D Map Visualization:** Interactive 3D terrain and fire visualization using `Three.js` and `@react-three/fiber`.
 *   **Safe Path Planning:** Implements the D* Lite algorithm to calculate dynamic safe paths for rescue teams or evacuation.
 *   **Interactive Dashboard:** Real-time analytics, user-friendly controls, and comprehensive data reporting.
 *   **Simulation Sandbox:** Test different scenarios and visualize potential fire outcomes in a controlled environment.
