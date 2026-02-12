@@ -8,7 +8,13 @@ import { Navigation } from "@/components/navigation"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import SimulationCanvas from "./SimulationCanvas"
-import RealTimeMap from "@/components/ui/RealTimeMap"
+import SimulationCanvas from "./SimulationCanvas"
+import dynamic from 'next/dynamic'
+
+const MapSimulation = dynamic(() => import('./MapSimulation'), {
+  ssr: false,
+  loading: () => <p>Loading Map...</p>,
+})
 
 function mulberry32(a: number) {
   return () => {
@@ -486,9 +492,9 @@ export default function Page() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          wind_speed: windSpeed[0],
+          wind_speed: windSpeed,
           wind_direction: windDir,
-          humidity: humidity[0]
+          humidity: humidity
         })
       });
       // Re-fetch grid to see changes visually
@@ -658,7 +664,15 @@ export default function Page() {
                     <div className="text-slate-400 animate-pulse">Loading Model Grid...</div>
                   )}
                 </div> */}
-                <RealTimeMap />
+                <div className="flex flex-col items-center w-full">
+                  {grid ? (
+                    <MapSimulation probGrid={grid} />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-[500px] w-full bg-slate-100 rounded-lg animate-pulse">
+                      <p className="text-slate-500 font-medium">Loading Map & Fire Data...</p>
+                    </div>
+                  )}
+                </div>
                 <div className="text-xs text-muted-foreground">Green=Unburnt, Orange=Burning, Gray=Burnt</div>
               </div>
             </CardContent>
