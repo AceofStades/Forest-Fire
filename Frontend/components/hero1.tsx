@@ -52,17 +52,19 @@ const Hero1 = () => {
                         delay={150}
                         animateBy="words"
                         direction="top"
-                        className="text-5xl md:text-7xl font-bold bg-gradient-to-r from-orange-400 via-red-400 to-amber-300 bg-clip-text text-transparent mb-6 pl-14"
+                        className="text-5xl md:text-7xl font-bold bg-gradient-to-r from-orange-400 via-red-400 to-amber-300 bg-clip-text  mb-6 pl-14"
                     />
+                    
                     <h3 className="text-xl md:text-2xl font-medium mb-4 text-gray-200/90 max-w-4xl mx-auto leading-relaxed">
                         Harnessing AI to Predict, Prevent, and Visualize Forest Fires — Turning Data into Actionable Insights for a Safer Tomorrow.
                     </h3>
 
                     <p className="text-base text-gray-400 mb-10 leading-relaxed max-w-3xl mx-auto">
                         Advanced AI/ML-powered platform for simulating and modeling forest fire spread. Get next-day fire
-                        probability maps, real-time spread animations, 2D to 3D terrain conversion, and custom predictions using
+                        probability maps, real-time spread animations, 2D terrain, and custom predictions using
                         cutting-edge U-Net, LSTM, and Cellular Automata models.
                     </p>
+                    
 
                     <div className="flex flex-col sm:flex-row gap-4 justify-center">
                         <Button
