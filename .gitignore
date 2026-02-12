@@ -302,4 +302,6 @@ Thumbs.db
 Model/dataset
 Model/vishal-datasets
 
-*.pth
+
+# Large model files
+best_fire_unet/
