@@ -8,7 +8,6 @@ import { Navigation } from "@/components/navigation"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import SimulationCanvas from "./SimulationCanvas"
-import SimulationCanvas from "./SimulationCanvas"
 import dynamic from 'next/dynamic'
 
 const MapSimulation = dynamic(() => import('./MapSimulation'), {
@@ -505,13 +504,13 @@ export default function Page() {
 
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <main className="min-h-screen bg-[#060609] text-foreground">
       <Navigation />
-      <div className="mx-auto max-w-6xl p-6 grid gap-6 md:grid-cols-[360px_1fr]">
+      <div className="mx-auto max-w-7xl p-6 grid gap-6 md:grid-cols-[380px_1fr]">
         <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-pretty">Wildfire CA Simulator</CardTitle>
+          <Card className="glass-card-bright border-white/[0.08]">
+            <CardHeader className="border-b border-white/[0.06]">
+              <CardTitle className="text-pretty bg-gradient-to-r from-orange-400 to-red-400 bg-clip-text text-transparent">Wildfire CA Simulator</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-muted-foreground">
@@ -631,11 +630,11 @@ export default function Page() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-pretty">Design Notes</CardTitle>
+          <Card className="glass-card-bright border-white/[0.08]">
+            <CardHeader className="border-b border-white/[0.06]">
+              <CardTitle className="text-pretty text-gray-200">Design Notes</CardTitle>
             </CardHeader>
-            <CardContent className="text-sm space-y-2">
+            <CardContent className="text-sm space-y-2 text-gray-400">
               <ul className="list-disc pl-5 space-y-1">
                 <li>States: 0=Unburnt, 1=Burning, 2=Burnt. Moore 8-neighborhood.</li>
                 <li>Base probability from ML per-pixel map.</li>
@@ -651,9 +650,9 @@ export default function Page() {
         </div>
 
         <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-pretty">Simulation Canvas</CardTitle>
+          <Card className="glass-card-bright border-white/[0.08]">
+            <CardHeader className="border-b border-white/[0.06]">
+              <CardTitle className="text-pretty bg-gradient-to-r from-orange-400 to-amber-300 bg-clip-text text-transparent">Simulation Canvas</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex flex-col items-start gap-3">
@@ -668,8 +667,9 @@ export default function Page() {
                   {grid ? (
                     <MapSimulation probGrid={grid} />
                   ) : (
-                    <div className="flex flex-col items-center justify-center h-[500px] w-full bg-slate-100 rounded-lg animate-pulse">
-                      <p className="text-slate-500 font-medium">Loading Map & Fire Data...</p>
+                    <div className="flex flex-col items-center justify-center h-[500px] w-full bg-white/[0.02] border border-white/[0.06] rounded-xl animate-pulse">
+                      <div className="w-10 h-10 border-2 border-orange-500/40 border-t-orange-500 rounded-full animate-spin mb-4" />
+                      <p className="text-gray-500 font-medium">Loading Map & Fire Data...</p>
                     </div>
                   )}
                 </div>
@@ -678,9 +678,9 @@ export default function Page() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-pretty">Demo API (optional)</CardTitle>
+          <Card className="glass-card-bright border-white/[0.08]">
+            <CardHeader className="border-b border-white/[0.06]">
+              <CardTitle className="text-pretty text-gray-200">Demo API (optional)</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               <p>

@@ -1,5 +1,5 @@
 "use client";
-import React, { useRef, useEffect, useState, useMemo } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { MapContainer, TileLayer, ImageOverlay, Polyline, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -17,44 +17,29 @@ interface SimulationProps {
     probGrid: number[][]; // 320 rows x 400 cols
 }
 
-// Bounding Box for a region in Uttarakhand (e.g., near Jim Corbett)
-// Top-Left: 29.60, 78.85
-// Bottom-Right: 29.45, 79.10
-// Width: ~0.25 deg, Height: ~0.15 deg
 const BOUNDS: [[number, number], [number, number]] = [
-    [29.5600, 78.9000], // South-West (Min Lat, Min Lon)
-    [29.5800, 78.9400]  // North-East (Max Lat, Max Lon)
+    [29.5600, 78.9000],
+    [29.5800, 78.9400]
 ];
 
 const ROWS = 320;
 const COLS = 400;
 
-// Helper to convert Grid Index to Lat/Lon
 const gridToLatLng = (r: number, c: number) => {
     const latSpan = BOUNDS[1][0] - BOUNDS[0][0];
     const lonSpan = BOUNDS[1][1] - BOUNDS[0][1];
-
-    // Grid (0,0) is Top-Left, which is Max Lat, Min Lon
-    // Grid (320, 400) is Bottom-Right, which is Min Lat, Max Lon
-
     const lat = BOUNDS[1][0] - (r / ROWS) * latSpan;
     const lon = BOUNDS[0][1] + (c / COLS) * lonSpan;
-
     return [lat, lon] as [number, number];
 };
 
-// Helper to convert Lat/Lon to Grid Index
 const latLngToGrid = (lat: number, lon: number) => {
     const latSpan = BOUNDS[1][0] - BOUNDS[0][0];
     const lonSpan = BOUNDS[1][1] - BOUNDS[0][1];
-
     let r = Math.floor(((BOUNDS[1][0] - lat) / latSpan) * ROWS);
     let c = Math.floor(((lon - BOUNDS[0][1]) / lonSpan) * COLS);
-
-    // Clamp
     r = Math.max(0, Math.min(ROWS - 1, r));
     c = Math.max(0, Math.min(COLS - 1, c));
-
     return [r, c];
 };
 
@@ -70,11 +55,8 @@ const MapEvents = ({ onMapClick }: { onMapClick: (lat: number, lon: number) => v
 const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
     const [imageUrl, setImageUrl] = useState<string>("");
     const [path, setPath] = useState<[number, number][]>([]);
-
-    // Canvas for generating the heatmap image
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-    // Initialize canvas once
     useEffect(() => {
         const canvas = document.createElement('canvas');
         canvas.width = COLS;
@@ -82,10 +64,8 @@ const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
         canvasRef.current = canvas;
     }, []);
 
-    // Update Image Overlay when probGrid changes
     useEffect(() => {
         if (!canvasRef.current || !probGrid || probGrid.length === 0) return;
-
         const ctx = canvasRef.current.getContext('2d');
         if (!ctx) return;
 
@@ -96,29 +76,25 @@ const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
             for (let c = 0; c < COLS; c++) {
                 const prob = probGrid[r][c];
                 const idx = (r * COLS + c) * 4;
-
                 if (prob > 0.0) {
-                    // Red color for fire, alpha depends on probability
-                    data[idx] = 255;     // R
-                    data[idx + 1] = 50;   // G
-                    data[idx + 2] = 0;   // B
-                    data[idx + 3] = Math.floor(prob * 200); // Alpha
+                    data[idx] = 255;
+                    data[idx + 1] = 50;
+                    data[idx + 2] = 0;
+                    data[idx + 3] = Math.floor(prob * 200);
                 } else {
-                    data[idx + 3] = 0; // Transparent
+                    data[idx + 3] = 0;
                 }
             }
         }
 
         ctx.putImageData(imageData, 0, 0);
         setImageUrl(canvasRef.current.toDataURL());
-
     }, [probGrid]);
 
     const handleMapClick = async (lat: number, lon: number) => {
         const [r, c] = latLngToGrid(lat, lon);
         console.log(`Clicked at Lat: ${lat}, Lon: ${lon} -> Grid: [${r}, ${c}]`);
 
-        // Define Goal (Center of the map for now, or could be another click)
         const goal: [number, number] = [Math.floor(ROWS / 2), Math.floor(COLS / 2)];
         const start: [number, number] = [r, c];
 
@@ -131,7 +107,6 @@ const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
 
             if (response.ok) {
                 const data = await response.json();
-                // Convert grid path back to lat/lon path
                 const latLngPath = data.path.map(([pr, pc]: [number, number]) => gridToLatLng(pr, pc));
                 setPath(latLngPath);
             }
@@ -141,16 +116,17 @@ const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
     };
 
     return (
-        <div className="w-full h-[600px] rounded-xl overflow-hidden border border-orange-500 relative">
+        <div className="w-full h-[700px] rounded-2xl overflow-hidden border border-orange-500/30 relative glow-border shadow-lg shadow-orange-500/5">
             <MapContainer
                 center={[29.5700, 78.9200]}
                 zoom={14}
                 style={{ height: '100%', width: '100%' }}
                 scrollWheelZoom={true}
             >
+                {/* Dark map tiles for professional look */}
                 <TileLayer
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    attribution='&copy; <a href="https://carto.com/">CARTO</a>'
+                    url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                 />
 
                 {/* Fire Grid Overlay */}
@@ -166,7 +142,7 @@ const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
                 {path.length > 0 && (
                     <Polyline
                         positions={path}
-                        color="lime"
+                        color="#4ade80"
                         weight={5}
                         opacity={0.9}
                     />
@@ -175,18 +151,23 @@ const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
                 <MapEvents onMapClick={handleMapClick} />
             </MapContainer>
 
-            <div className="absolute top-4 right-4 bg-slate-900/90 text-white p-4 rounded-lg z-[1000] max-w-xs">
-                <h3 className="font-bold mb-2">Uttarakhand Forest Safe Route</h3>
-                <p className="text-xs text-gray-300">
+            {/* Info Overlay - Glassmorphism */}
+            <div className="absolute top-4 right-4 bg-black/80 backdrop-blur-xl text-white p-4 rounded-xl z-[1000] max-w-xs border border-white/10 shadow-xl">
+                <h3 className="font-bold mb-2 text-sm bg-gradient-to-r from-orange-400 to-amber-300 bg-clip-text text-transparent">
+                    Uttarakhand Forest Safe Route
+                </h3>
+                <p className="text-xs text-gray-400 leading-relaxed">
                     Click anywhere on the map to find a safe path to the sector center avoiding fire zones.
                 </p>
-                <div className="mt-2 flex items-center gap-2">
-                    <div className="w-4 h-4 bg-red-600 opacity-70 rounded"></div>
-                    <span className="text-xs">Fire Risk Zone</span>
-                </div>
-                <div className="mt-1 flex items-center gap-2">
-                    <div className="w-4 h-1 bg-lime-400 rounded"></div>
-                    <span className="text-xs">Safe Route (D* Lite)</span>
+                <div className="mt-3 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                        <div className="w-3.5 h-3.5 bg-gradient-to-br from-red-500 to-orange-500 opacity-80 rounded-sm shadow-sm shadow-red-500/30"></div>
+                        <span className="text-xs text-gray-300">Fire Risk Zone</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <div className="w-3.5 h-1 bg-gradient-to-r from-green-400 to-emerald-300 rounded-full"></div>
+                        <span className="text-xs text-gray-300">Safe Route (D* Lite)</span>
+                    </div>
                 </div>
             </div>
         </div>
