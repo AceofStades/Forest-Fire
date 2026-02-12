@@ -4,44 +4,16 @@ import { MapContainer, TileLayer, ImageOverlay, Polyline, useMapEvents } from 'r
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
-// Fix for default marker icon in Next.js
-// @ts-ignore
-delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-    iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-    iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-});
+import { BOUNDS, ROWS, COLS, gridToLatLng, latLngToGrid } from './simulationUtils';
+
+
 
 interface SimulationProps {
     probGrid: number[][] | null; // 320 rows x 400 cols
+    fireState?: Uint8Array | null; // 1D array of size w*h
+    width?: number;
+    height?: number;
 }
-
-const BOUNDS: [[number, number], [number, number]] = [
-    [29.5600, 78.9000],
-    [29.5800, 78.9400]
-];
-
-const ROWS = 320;
-const COLS = 400;
-
-const gridToLatLng = (r: number, c: number) => {
-    const latSpan = BOUNDS[1][0] - BOUNDS[0][0];
-    const lonSpan = BOUNDS[1][1] - BOUNDS[0][1];
-    const lat = BOUNDS[1][0] - (r / ROWS) * latSpan;
-    const lon = BOUNDS[0][1] + (c / COLS) * lonSpan;
-    return [lat, lon] as [number, number];
-};
-
-const latLngToGrid = (lat: number, lon: number) => {
-    const latSpan = BOUNDS[1][0] - BOUNDS[0][0];
-    const lonSpan = BOUNDS[1][1] - BOUNDS[0][1];
-    let r = Math.floor(((BOUNDS[1][0] - lat) / latSpan) * ROWS);
-    let c = Math.floor(((lon - BOUNDS[0][1]) / lonSpan) * COLS);
-    r = Math.max(0, Math.min(ROWS - 1, r));
-    c = Math.max(0, Math.min(COLS - 1, c));
-    return [r, c];
-};
 
 const MapEvents = ({ onMapClick }: { onMapClick: (lat: number, lon: number) => void }) => {
     useMapEvents({
@@ -52,18 +24,35 @@ const MapEvents = ({ onMapClick }: { onMapClick: (lat: number, lon: number) => v
     return null;
 };
 
-const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
+const MapSimulation: React.FC<SimulationProps> = ({ probGrid, fireState, width = COLS, height = ROWS }) => {
     const [imageUrl, setImageUrl] = useState<string>("");
+    const [fireUrl, setFireUrl] = useState<string>("");
     const [path, setPath] = useState<[number, number][]>([]);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const fireCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
     useEffect(() => {
+        // Fix for default marker icon in Next.js
+        // @ts-ignore
+        delete L.Icon.Default.prototype._getIconUrl;
+        L.Icon.Default.mergeOptions({
+            iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+            iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+        });
+
         const canvas = document.createElement('canvas');
         canvas.width = COLS;
         canvas.height = ROWS;
         canvasRef.current = canvas;
-    }, []);
 
+        const fCanvas = document.createElement('canvas');
+        fCanvas.width = width;
+        fCanvas.height = height;
+        fireCanvasRef.current = fCanvas;
+    }, [width, height]);
+
+    // Render Static Probability Grid
     useEffect(() => {
         if (!canvasRef.current || !probGrid || probGrid.length === 0) return;
         const ctx = canvasRef.current.getContext('2d');
@@ -90,6 +79,39 @@ const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
         ctx.putImageData(imageData, 0, 0);
         setImageUrl(canvasRef.current.toDataURL());
     }, [probGrid]);
+
+
+    // Render Dynamic Fire State
+    useEffect(() => {
+        if (!fireCanvasRef.current || !fireState) return;
+        const ctx = fireCanvasRef.current.getContext('2d');
+        if (!ctx) return;
+
+        const imageData = ctx.createImageData(width, height);
+        const data = imageData.data;
+
+        for (let i = 0; i < fireState.length; i++) {
+            const state = fireState[i];
+            const idx = i * 4;
+            if (state === 1) { // Burning
+                data[idx] = 255; // R
+                data[idx + 1] = 69; // G
+                data[idx + 2] = 0;  // B
+                data[idx + 3] = 200; // A
+            } else if (state === 2) { // Burnt
+                data[idx] = 20;
+                data[idx + 1] = 20;
+                data[idx + 2] = 20;
+                data[idx + 3] = 150;
+            } else {
+                data[idx + 3] = 0;
+            }
+        }
+        ctx.putImageData(imageData, 0, 0);
+        setFireUrl(fireCanvasRef.current.toDataURL());
+
+    }, [fireState, width, height]);
+
 
     const handleMapClick = async (lat: number, lon: number) => {
         const [r, c] = latLngToGrid(lat, lon);
@@ -118,8 +140,8 @@ const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
     return (
         <div className="w-full h-[700px] rounded-2xl overflow-hidden border border-orange-500/30 relative glow-border shadow-lg shadow-orange-500/5">
             <MapContainer
-                center={[29.5700, 78.9200]}
-                zoom={14}
+                center={[30.00, 80.00]}
+                zoom={13}
                 style={{ height: '100%', width: '100%' }}
                 scrollWheelZoom={true}
             >
@@ -129,12 +151,22 @@ const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
                     url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                 />
 
-                {/* Fire Grid Overlay */}
+                {/* Fire Probability Grid Overlay */}
                 {imageUrl && (
                     <ImageOverlay
                         url={imageUrl}
                         bounds={BOUNDS}
-                        opacity={0.7}
+                        opacity={0.4}
+                    />
+                )}
+
+                {/* Active Fire Simulation Overlay */}
+                {fireUrl && (
+                    <ImageOverlay
+                        url={fireUrl}
+                        bounds={BOUNDS}
+                        opacity={0.9}
+                        zIndex={100}
                     />
                 )}
 
@@ -167,6 +199,10 @@ const MapSimulation: React.FC<SimulationProps> = ({ probGrid }) => {
                     <div className="flex items-center gap-2">
                         <div className="w-3.5 h-1 bg-gradient-to-r from-green-400 to-emerald-300 rounded-full"></div>
                         <span className="text-xs text-gray-300">Safe Route (D* Lite)</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <div className="w-3.5 h-3.5 bg-red-600 rounded-sm"></div>
+                        <span className="text-xs text-gray-300">Active Fire</span>
                     </div>
                 </div>
             </div>

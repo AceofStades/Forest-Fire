@@ -4,7 +4,13 @@ import { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Navigation } from "@/components/navigation"
 import { Button } from "@/components/ui/button"
-import MapSimulation from "./MapSimulation"
+import dynamic from 'next/dynamic'
+
+const MapSimulation = dynamic(() => import("./MapSimulation"), {
+  ssr: false,
+  loading: () => <div className="h-[700px] w-full bg-muted/20 animate-pulse rounded-2xl flex items-center justify-center">Loading Map...</div>
+})
+
 import { DesignNotes } from "./DesignNotes"
 import { SimulationControls } from "./SimulationControls"
 import {
@@ -15,11 +21,14 @@ import {
   drawMapPreview,
   mulberry32,
   idx,
+  latLngToGrid,
+  ROWS,
+  COLS,
 } from "./simulationUtils"
 
 export default function Page() {
   // parameters
-  const [windSpeed, setWindSpeed] = useState(6)
+  const [windSpeed, setWindSpeed] = useState(0) // Default 0 for equal spread
   const [windDir, setWindDir] = useState(90)
   const [humidity, setHumidity] = useState(25)
   const [ignitionThreshold, setIgnitionThreshold] = useState(0.6)
@@ -53,7 +62,7 @@ export default function Page() {
 
   async function loadDefaultMap() {
     setStatus("Loading map…")
-    const { w, h, dem, fuel } = await loadImageGrid("/images/default-map.png", 200)
+    const { w, h, dem, fuel } = await loadImageGrid("/images/default-map.png", COLS)
     setW(w)
     setH(h)
     setDem(dem)
@@ -85,6 +94,10 @@ export default function Page() {
   // Ensure frames exist (compute using current params); returns frames for immediate use
   function ensureFrames(): Uint8Array[] {
     if (!dem || !fuel || !fireProb) return []
+
+    // Start at 30N, 80E
+    const [startR, startC] = latLngToGrid(30.00, 80.00, w, h)
+
     const f = simulateCA({
       dem,
       fuel,
@@ -97,6 +110,7 @@ export default function Page() {
       windDir,
       humidity,
       seed,
+      startPoints: [{ x: startC, y: startR }],
     })
     setFrames(f)
     setCur(0)
@@ -175,6 +189,18 @@ export default function Page() {
     setStatus("Cleared")
   }
 
+  // Whenever any parameter changes, reset the simulation frames to ensure the new params take effect
+  // on the next Play or Step
+  useEffect(() => {
+    // only if we have frames already, to avoid infinite loops or clearing initial state excessively
+    if (frames.length > 0) {
+      setFrames([])
+      setCur(0)
+      pause()
+      setStatus("Parameters changed - Click Start to apply")
+    }
+  }, [windSpeed, windDir, humidity, ignitionThreshold, nSteps, seed])
+
   // Whenever speed slider, wind speed, or ignition threshold change, update the timer while playing
   useEffect(() => {
     if (!playing || !frames.length) return
@@ -190,7 +216,7 @@ export default function Page() {
     return () => {
       if (timerRef.current) window.clearInterval(timerRef.current)
     }
-  }, [playing, speedMs, windSpeed, ignitionThreshold, frames])
+  }, [playing, speedMs, frames])
 
   // Autoload default map on first render
   useEffect(() => {
@@ -294,7 +320,7 @@ export default function Page() {
               <div className="flex flex-col items-start gap-3">
                 <div className="flex flex-col items-center w-full">
                   {grid ? (
-                    <MapSimulation probGrid={grid} />
+                    <MapSimulation probGrid={grid} fireState={frames[cur]} width={w} height={h} />
                   ) : (
                     <div className="flex flex-col items-center justify-center h-[500px] w-full bg-white/[0.02] border border-white/[0.06] rounded-xl animate-pulse">
                       <div className="w-10 h-10 border-2 border-orange-500/40 border-t-orange-500 rounded-full animate-spin mb-4" />

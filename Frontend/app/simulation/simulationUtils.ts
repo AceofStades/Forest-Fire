@@ -1,4 +1,32 @@
 
+// Map Constants
+export const ROWS = 320;
+export const COLS = 400;
+
+// Center around 30N, 80E
+export const BOUNDS: [[number, number], [number, number]] = [
+    [29.95, 79.95],
+    [30.05, 80.05]
+];
+
+export const gridToLatLng = (r: number, c: number, w = COLS, h = ROWS) => {
+    const latSpan = BOUNDS[1][0] - BOUNDS[0][0];
+    const lonSpan = BOUNDS[1][1] - BOUNDS[0][1];
+    const lat = BOUNDS[1][0] - (r / h) * latSpan;
+    const lon = BOUNDS[0][1] + (c / w) * lonSpan;
+    return [lat, lon] as [number, number];
+};
+
+export const latLngToGrid = (lat: number, lon: number, w = COLS, h = ROWS) => {
+    const latSpan = BOUNDS[1][0] - BOUNDS[0][0];
+    const lonSpan = BOUNDS[1][1] - BOUNDS[0][1];
+    let r = Math.floor(((BOUNDS[1][0] - lat) / latSpan) * h);
+    let c = Math.floor(((lon - BOUNDS[0][1]) / lonSpan) * w);
+    r = Math.max(0, Math.min(h - 1, r));
+    c = Math.max(0, Math.min(w - 1, c));
+    return [r, c];
+};
+
 export const OFFS: Array<[number, number]> = [
     [-1, -1],
     [-1, 0],
@@ -150,17 +178,26 @@ export function simulateCA(params: {
     windDir: number // degrees TO
     humidity: number // %
     seed: number
+    startPoints?: Array<{ x: number; y: number }>
 }) {
-    const { fireProb, dem, fuel, w, h, nSteps, ignitionThreshold, windSpeed, windDir, humidity, seed } = params
+    const { fireProb, dem, fuel, w, h, nSteps, ignitionThreshold, windSpeed, windDir, humidity, seed, startPoints } = params
 
     const rng = mulberry32(seed)
     const slope = computeSlope(dem, w, h)
     const state = new Uint8Array(w * h) // 0 unburnt, 1 burning, 2 burnt
 
-    // 🔥 Fire starts at center
-    const centerX = Math.floor(w / 2)
-    const centerY = Math.floor(h / 2)
-    state[idx(centerX, centerY, w)] = 1
+    // 🔥 Fire starts at specified points or center if none provided
+    if (startPoints && startPoints.length > 0) {
+        startPoints.forEach(p => {
+            if (p.x >= 0 && p.x < w && p.y >= 0 && p.y < h) {
+                state[idx(p.x, p.y, w)] = 1
+            }
+        })
+    } else {
+        const centerX = Math.floor(w / 2)
+        const centerY = Math.floor(h / 2)
+        state[idx(centerX, centerY, w)] = 1
+    }
 
     const frames: Array<Uint8Array> = [state.slice(0)]
     const hf = humidityFactor(humidity)
