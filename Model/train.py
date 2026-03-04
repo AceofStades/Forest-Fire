@@ -1,137 +1,176 @@
 import os
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.optim as optim
 
-# Import from our clean package
-from src.dataset import get_dataloaders
+# Import from our updated package
+from src.dataset import load_split_data
 from src.models import UNet
-from src.utils import compute_metrics, dice_loss
-from torch.amp import GradScaler, autocast
+from src.utils import DiceLoss, calculate_accuracy
 from tqdm import tqdm
 
 # --- CONFIG ---
-SEQ_LEN = 3
-LEAD_TIME = 8  # 24 hours
-BATCH_SIZE = 32
-EPOCHS = 50
-LR = 1e-4
-WEIGHT_DECAY = 1e-4
+MODEL_SAVE_PATH = "best_fire_unet.pth"
+SAMPLE_OUTPUT_PATH = "simulation_input/fire_prediction_sample.npy"
+VISUALIZATION_PATH = "simulation_input/prediction_visual.png"
 
-# HIGH WEIGHT to find sparse fires
-POS_WEIGHT = 50.0
-
-SAVE_DIR = "weights"
-SAVE_PATH = os.path.join(SAVE_DIR, "best_unet.pth")
+# Hyperparameters
+NUM_EPOCHS = 25
+LEARNING_RATE = 1e-3
+BATCH_SIZE = 8
+ACCUMULATION_STEPS = 4  # Effective Batch Size = 32
 
 
-def main():
-    print(f"\n--- Initializing Data ---")
-    train_loader, val_loader, in_channels = get_dataloaders(
-        BATCH_SIZE, SEQ_LEN, LEAD_TIME
+def train_and_save():
+    # Check for CUDA
+    if torch.cuda.is_available():
+        DEVICE = torch.device("cuda")
+        torch.backends.cudnn.benchmark = True
+    else:
+        DEVICE = torch.device("cpu")
+
+    print(f"Training on device: {DEVICE}")
+    os.makedirs("simulation_input", exist_ok=True)
+
+    # Load Data
+    try:
+        train_loader, val_loader, input_channels = load_split_data(
+            batch_size=BATCH_SIZE
+        )
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        return
+
+    model = UNet(n_channels=input_channels, n_classes=1).to(DEVICE)
+
+    # Loss and Optimizer
+    criterion = DiceLoss().to(DEVICE)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+    best_val_loss = float("inf")
+
+    print(
+        f"Starting training with Batch Size {BATCH_SIZE} x {ACCUMULATION_STEPS} Steps = Effective {BATCH_SIZE * ACCUMULATION_STEPS}"
     )
-    print(f"Model Input Channels: {in_channels}")
 
-    model = UNet(n_channels=in_channels, n_classes=1).cuda()
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-
-    # Scheduler to reduce LR when learning stalls
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", patience=3, factor=0.5
-    )
-
-    criterion_bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([POS_WEIGHT]).cuda())
-    scaler = GradScaler("cuda")
-
-    best_iou = 0.0
-    os.makedirs(SAVE_DIR, exist_ok=True)
-
-    print("\nStarting Training...")
-
-    for epoch in range(EPOCHS):
+    for epoch in range(NUM_EPOCHS):
         model.train()
-        train_loss = 0
-        train_acc = 0
-        batches_processed = 0
+        train_loss = 0.0
+        train_acc_accum = 0.0
+        optimizer.zero_grad()
 
-        loop = tqdm(train_loader, desc=f"Ep {epoch + 1}/{EPOCHS} [Train]")
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{NUM_EPOCHS}", unit="batch")
 
-        for x, y in loop:
-            x, y = x.cuda(non_blocking=True), y.cuda(non_blocking=True)
-            optimizer.zero_grad()
+        batch_count = 0
+        for i, (inputs, labels) in enumerate(pbar):
+            inputs = inputs.to(DEVICE, non_blocking=True)
+            labels = labels.to(DEVICE, non_blocking=True)
 
-            with autocast("cuda"):
-                pred = model(x)
-                # Combined Loss: BCE (High Weight) + Dice
-                loss = criterion_bce(pred, y) + dice_loss(pred, y)
-
-            # --- STABILITY CHECKS ---
-            if torch.isnan(loss) or torch.isinf(loss):
-                loop.set_postfix(status="NaN Loss - Skipping")
+            if torch.isnan(inputs).any():
                 continue
 
-            # Scaled Backward Pass
-            scaler.scale(loss).backward()
+            # Forward Pass
+            outputs = model(inputs)
 
-            # --- CRITICAL FIX: GRADIENT CLIPPING ---
-            # Prevents the scaler from crashing on massive gradients
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            loss = criterion(outputs, labels)
 
-            scaler.step(optimizer)
-            scaler.update()
+            # Normalize loss by accumulation steps
+            loss = loss / ACCUMULATION_STEPS
+            loss.backward()
 
-            # Metrics
-            with torch.no_grad():
-                _, _, acc = compute_metrics(pred, y)
-                train_acc += acc
+            # Calculate Batch Accuracy
+            acc = calculate_accuracy(outputs, labels)
+            train_acc_accum += acc
+            batch_count += 1
 
-            train_loss += loss.item()
-            batches_processed += 1
-            loop.set_postfix(loss=loss.item(), acc=acc)
+            # Step Optimizer only every 'ACCUMULATION_STEPS'
+            if (i + 1) % ACCUMULATION_STEPS == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                optimizer.zero_grad()
 
-        # --- VAL ---
+            # Record the "real" loss (multiply back for display)
+            current_loss = loss.item() * ACCUMULATION_STEPS
+            train_loss += current_loss
+
+            pbar.set_postfix(loss=f"{current_loss:.4f}", acc=f"{acc:.4f}")
+
+        avg_train_loss = train_loss / batch_count if batch_count > 0 else 0
+        avg_train_acc = train_acc_accum / batch_count if batch_count > 0 else 0
+
+        # Validation Loop
         model.eval()
-        val_iou = 0
-        val_rec = 0
-        val_acc = 0
+        val_loss = 0.0
+        val_acc_accum = 0.0
+        val_batches = 0
 
         with torch.no_grad():
-            for x, y in val_loader:
-                x, y = x.cuda(non_blocking=True), y.cuda(non_blocking=True)
-                with autocast("cuda"):
-                    pred = model(x)
+            for inputs, labels in val_loader:
+                inputs = inputs.to(DEVICE, non_blocking=True)
+                labels = labels.to(DEVICE, non_blocking=True)
 
-                iou, rec, acc = compute_metrics(pred, y)
-                val_iou += iou
-                val_rec += rec
-                val_acc += acc
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
 
-        if batches_processed > 0:
-            avg_train_loss = train_loss / batches_processed
-            avg_train_acc = train_acc / batches_processed
-        else:
-            avg_train_loss = 0
-            avg_train_acc = 0
+                acc = calculate_accuracy(outputs, labels)
+                val_acc_accum += acc
+                val_batches += 1
 
-        avg_val_iou = val_iou / len(val_loader)
-        avg_val_rec = val_rec / len(val_loader)
+        avg_val_loss = val_loss / len(val_loader)
+        avg_val_acc = val_acc_accum / val_batches if val_batches > 0 else 0
 
-        scheduler.step(avg_val_iou)
+        print(f"\nEpoch {epoch + 1} Summary:")
+        print(f"  Train Loss: {avg_train_loss:.4f} | Train Acc: {avg_train_acc:.4f}")
+        print(f"  Val Loss:   {avg_val_loss:.4f} | Val Acc:   {avg_val_acc:.4f}")
 
-        print(
-            f"Summary: Loss {avg_train_loss:.4f} | Train Acc {avg_train_acc:.4f} || Val IoU {avg_val_iou:.4f} | Val Rec {avg_val_rec:.4f}"
-        )
+        if np.isnan(avg_val_loss):
+            print("Error: Validation loss became NaN. Stopping.")
+            break
 
-        if avg_val_iou > best_iou:
-            best_iou = avg_val_iou
-            torch.save(model.state_dict(), SAVE_PATH)
-            print(f"*** NEW RECORD! Model Saved ({best_iou:.4f}) ***")
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            torch.save(model.state_dict(), MODEL_SAVE_PATH)
+            print(">>> Model Saved (New Best Validation Loss)!")
 
-        print("-" * 60)
+    # --- VISUALIZATION ---
+    print("\nGenerating sample prediction...")
+    try:
+        model.load_state_dict(torch.load(MODEL_SAVE_PATH))
+        print(f"Loaded weights from {MODEL_SAVE_PATH}")
+    except:
+        print("Using current weights.")
+
+    model.eval()
+    sample_inputs, sample_labels = next(iter(val_loader))
+    sample_inputs = sample_inputs.to(DEVICE)
+
+    with torch.no_grad():
+        logits = model(sample_inputs)
+        probs = torch.sigmoid(logits)
+
+    prediction_np = probs[0, 0].float().cpu().numpy()
+    ground_truth_np = sample_labels[0, 0].float().cpu().numpy()
+
+    np.save(SAMPLE_OUTPUT_PATH, prediction_np)
+
+    plt.figure(figsize=(10, 5))
+    plt.subplot(1, 2, 1)
+    plt.title("Ground Truth")
+    plt.imshow(ground_truth_np, cmap="hot", interpolation="nearest")
+    plt.colorbar()
+
+    plt.subplot(1, 2, 2)
+    plt.title("Prediction")
+    plt.imshow(prediction_np, cmap="hot", interpolation="nearest")
+    plt.colorbar()
+
+    plt.savefig(VISUALIZATION_PATH)
+    print(f"Visualization saved to {VISUALIZATION_PATH}")
 
 
 if __name__ == "__main__":
-    main()
+    train_and_save()

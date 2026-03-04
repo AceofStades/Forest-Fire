@@ -1,25 +1,26 @@
 import os
 import pickle
-import random
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 import xarray as xr
+from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
 
+# --- CONFIGURATION ---
+# Using DYNAMIC dataset as requested
 INPUT_NC_PATH = "dataset/final_feature_stack_DYNAMIC.nc"
-CACHE_PATH = "weights/stats_cache.pkl"
+CACHE_PATH = "stats_cache.pkl"
 
 
 class FireDataset(Dataset):
-    def __init__(self, data, targets, indices, seq_len, lead_time, augment=False):
-        self.data = data
-        self.targets = targets
+    def __init__(self, loaded_ds, indices, stats, feature_vars):
+        self.ds = loaded_ds
         self.indices = indices
-        self.seq_len = seq_len
-        self.lead_time = lead_time
-        self.augment = augment
+        self.stats = stats
+        self.feature_vars = feature_vars
 
     def __len__(self):
         return len(self.indices)
@@ -27,93 +28,124 @@ class FireDataset(Dataset):
     def __getitem__(self, idx):
         t_idx = self.indices[idx]
 
-        # 1. Time Stacking
-        x_seq = self.data[t_idx - self.seq_len + 1 : t_idx + 1]
-        x_flat = np.concatenate(list(x_seq), axis=0)
+        X_data = (
+            self.ds[self.feature_vars]
+            .isel(valid_time=t_idx)
+            .to_array(dim="channel")
+            .values
+        )
+        Y_data = self.ds["MODIS_FIRE_T1"].isel(valid_time=t_idx + 1).values
 
-        # Target
-        y_data = self.targets[t_idx + self.lead_time]
+        # Robust Normalization with Clipping
+        min_v = self.stats["min"][:, None, None]
+        max_v = self.stats["max"][:, None, None]
 
-        x_tensor = torch.from_numpy(x_flat).float()
-        y_tensor = torch.from_numpy(y_data).float().unsqueeze(0)
+        # Clip values to the calculated range first
+        X_data = np.clip(X_data, min_v, max_v)
 
-        # 2. Augmentation (Training Only)
-        if self.augment:
-            # Horizontal Flip
-            if random.random() > 0.5:
-                x_tensor = torch.flip(x_tensor, [-1])
-                y_tensor = torch.flip(y_tensor, [-1])
-            # Vertical Flip
-            if random.random() > 0.5:
-                x_tensor = torch.flip(x_tensor, [-2])
-                y_tensor = torch.flip(y_tensor, [-2])
-            # NO ROTATION (Prevents shape mismatch crash)
+        denominator = max_v - min_v + np.float32(1e-6)
+        X_norm = (X_data - min_v) / denominator
 
-        # 3. Dynamic Padding
-        _, h, w = x_tensor.shape
+        # Pad to 320x400 (or nearest multiple of 16)
+        X_tensor = torch.from_numpy(X_norm).float()
+        Y_tensor = torch.from_numpy(Y_data).float().unsqueeze(0)
+
+        _, h, w = X_tensor.shape
         pad_h = (16 - h % 16) % 16
         pad_w = (16 - w % 16) % 16
+
         if pad_h > 0 or pad_w > 0:
-            x_tensor = F.pad(x_tensor, (0, pad_w, 0, pad_h))
-            y_tensor = F.pad(y_tensor, (0, pad_w, 0, pad_h))
+            X_tensor = F.pad(X_tensor, (0, pad_w, 0, pad_h))
+            Y_tensor = F.pad(Y_tensor, (0, pad_w, 0, pad_h))
 
-        return x_tensor, y_tensor
+        return X_tensor, Y_tensor
 
 
-def get_dataloaders(batch_size=32, seq_len=3, lead_time=1):
-    print(f"Loading {INPUT_NC_PATH}...")
-    with xr.open_dataset(INPUT_NC_PATH, engine="h5netcdf") as ds:
-        features = list(ds.data_vars)
-        data_np = ds.to_array(dim="channel").values
-        data_np = np.transpose(data_np, (1, 0, 2, 3)).astype(np.float32)
-        target_np = ds["MODIS_FIRE_T1"].values.astype(np.float32)
-
-    # Stats / Normalization
-    os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
+def compute_global_stats(ds_loaded, feature_vars):
     if os.path.exists(CACHE_PATH):
-        with open(CACHE_PATH, "rb") as f:
-            stats = pickle.load(f)
+        print(f"--- Loading cached stats from {CACHE_PATH} ---")
+        try:
+            with open(CACHE_PATH, "rb") as f:
+                stats = pickle.load(f)
+
+            # Validate cache content
+            if isinstance(stats, dict) and "min" in stats and "max" in stats:
+                return stats
+            else:
+                print(
+                    f"Warning: Cache file {CACHE_PATH} is invalid or from a previous version (missing keys). Recomputing..."
+                )
+        except Exception as e:
+            print(
+                f"Warning: Failed to load cache file {CACHE_PATH} ({e}). Recomputing..."
+            )
+
+    print("--- Computing Robust Stats (2nd/98th Percentiles) ---")
+    num_channels = len(feature_vars)
+    mins = np.zeros(num_channels)
+    maxs = np.zeros(num_channels)
+
+    for i, var in enumerate(tqdm(feature_vars, desc="Analyzing Channels")):
+        data = ds_loaded[var].values
+        mins[i] = np.nanpercentile(data, 2)
+        maxs[i] = np.nanpercentile(data, 98)
+
+    stats = {"min": mins.astype(np.float32), "max": maxs.astype(np.float32)}
+
+    with open(CACHE_PATH, "wb") as f:
+        pickle.dump(stats, f)
+
+    return stats
+
+
+def load_split_data(batch_size=32):
+    print(f"--- Loading entire dataset into RAM ({INPUT_NC_PATH}) ---")
+
+    if not os.path.exists(INPUT_NC_PATH):
+        # Fallback logic for path resolution
+        potential_path = os.path.join("Model", INPUT_NC_PATH)
+        if os.path.exists(potential_path):
+            input_path = potential_path
+        else:
+            input_path = INPUT_NC_PATH  # Hope for the best or fail
     else:
-        stats = {
-            "mean": np.nanmean(data_np, axis=(0, 2, 3), keepdims=True),
-            "std": np.nanstd(data_np, axis=(0, 2, 3), keepdims=True),
-        }
-        with open(CACHE_PATH, "wb") as f:
-            pickle.dump(stats, f)
+        input_path = INPUT_NC_PATH
 
-    data_np = (data_np - stats["mean"]) / (stats["std"] + 1e-6)
+    print(f"Reading from: {input_path}")
 
-    # --- RANDOM SPLIT (Fixes the Empty Validation Issue) ---
-    print("Performing RANDOM Split (Shuffling time steps)...")
+    with xr.open_dataset(input_path, engine="h5netcdf", chunks=None) as ds:
+        ds_loaded = ds.load()  # Force load to RAM
+        feature_vars = [v for v in ds.data_vars if v != "MODIS_FIRE_T1"]
+        total_steps = ds.sizes["valid_time"]
 
-    total_samples = data_np.shape[0]
-    indices = np.arange(seq_len - 1, total_samples - lead_time)
+    print("--- Dataset Loaded into RAM ---")
 
-    # Deterministic Shuffle (So results are reproducible)
-    np.random.seed(42)
-    np.random.shuffle(indices)
+    stats = compute_global_stats(ds_loaded, feature_vars)
 
-    split_idx = int(len(indices) * 0.8)
-    train_indices = indices[:split_idx]
-    val_indices = indices[split_idx:]
+    indices = np.arange(total_steps - 1)
+    train_idx, val_idx = train_test_split(indices, test_size=0.2, shuffle=False)
 
-    print(f"Train Samples: {len(train_indices)} | Val Samples: {len(val_indices)}")
+    train_ds = FireDataset(ds_loaded, train_idx, stats, feature_vars)
+    val_ds = FireDataset(ds_loaded, val_idx, stats, feature_vars)
 
-    # Both sets use the FULL MAP, but different time steps
-    train_ds = FireDataset(
-        data_np, target_np, train_indices, seq_len, lead_time, augment=True
-    )
-    val_ds = FireDataset(
-        data_np, target_np, val_indices, seq_len, lead_time, augment=False
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=8,
+        pin_memory=True,
+        prefetch_factor=4,
+        persistent_workers=True,
     )
 
-    in_channels = len(features) * seq_len
-
-    train_dl = DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=8,
+        pin_memory=True,
+        prefetch_factor=2,
+        persistent_workers=True,
     )
-    val_dl = DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True
-    )
 
-    return train_dl, val_dl, in_channels
+    return train_loader, val_loader, len(feature_vars)

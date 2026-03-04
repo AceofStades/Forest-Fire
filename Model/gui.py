@@ -7,11 +7,50 @@ import xarray as xr
 
 st.set_page_config(layout="wide")
 
-FINAL_MASTER_PATH = "dataset/final_feature_stack_MASTER.nc"
-MODIS_OG = "dataset/MODIS/modis_2016_India.csv"
-MODIS_FINAL = "dataset/MODIS/final-modis.csv"
-ERA5_PATH = "dataset/ERA5-Land/era5-april/data_0.nc"
-ERA5_PATH_RE = "dataset/ERA5-Land/final-era5_rechunked.nc"
+# --- PATH SETUP ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+# Helper to join paths relative to the script location
+def get_path(rel_path):
+    return os.path.join(BASE_DIR, rel_path)
+
+
+FINAL_MASTER_PATH = get_path("dataset/final_feature_stack_MASTER.nc")
+MODIS_OG = get_path("dataset/MODIS/modis_2016_India.csv")
+MODIS_FINAL = get_path("dataset/MODIS/final-modis.csv")
+ERA5_PATH = get_path("dataset/ERA5-Land/era5-april/data_0.nc")
+ERA5_PATH_RE = get_path("dataset/ERA5-Land/final-era5_rechunked.nc")
+
+# --- HELPER FUNCTIONS ---
+
+
+def parse_and_save_csv(txt_path, csv_path):
+    """Reads a metrics text file and saves/returns a CSV DataFrame."""
+    if not os.path.exists(txt_path):
+        return None
+
+    data = {}
+    try:
+        with open(txt_path, "r") as f:
+            for line in f:
+                if ":" in line:
+                    key, val = line.split(":", 1)
+                    key = key.strip()
+                    val = val.strip()
+                    if key.lower() == "model":
+                        continue  # Skip model name row
+                    try:
+                        data[key] = float(val)
+                    except ValueError:
+                        data[key] = val
+
+        df = pd.DataFrame.from_dict(data, orient="index", columns=["Score"])
+        df.to_csv(csv_path)
+        return df
+    except Exception as e:
+        st.error(f"Error parsing {txt_path}: {e}")
+        return None
 
 
 def get_data_safe(
@@ -44,10 +83,14 @@ def get_dense_samples(path, var_name, num_samples=3):
 
             data_var = ds[var_name]
 
-            if var_name == "MODIS_FIRE_T1":
-                search_data = data_var.compute()
+            # Fix for static variables (GHS, LULC) lacking valid_time
+            if "valid_time" in data_var.dims:
+                if var_name == "MODIS_FIRE_T1":
+                    search_data = data_var.compute()
+                else:
+                    search_data = data_var.isel(valid_time=0).compute()
             else:
-                search_data = data_var.isel(valid_time=0).compute()
+                search_data = data_var.compute()
 
             raw_values = search_data.values
             indices = np.argwhere(raw_values > 0)
@@ -59,6 +102,7 @@ def get_dense_samples(path, var_name, num_samples=3):
 
             valid_clusters = []
             for idx in indices:
+                # Handle 2D (lat, lon) vs 3D (time, lat, lon) indices
                 if len(idx) == 3:
                     t, lat, lon = idx
                     window = raw_values[
@@ -102,7 +146,86 @@ def get_dense_samples(path, var_name, num_samples=3):
         return [pd.DataFrame({"Error": [str(e)]})]
 
 
+# --- GUI LAYOUT ---
+
 st.title("Forest Fire Project Diagnostics")
+st.divider()
+
+st.subheader("Model Performance Comparison")
+
+# Parse and create CSVs
+m1_txt = get_path("assets/best_fire_unet_results.txt")
+m1_csv = get_path("assets/best_fire_unet_results.csv")
+df_m1 = parse_and_save_csv(m1_txt, m1_csv)
+
+m2_txt = get_path("assets/best_convlstm_results.txt")
+m2_csv = get_path("assets/best_convlstm_results.csv")
+df_m2 = parse_and_save_csv(m2_txt, m2_csv)
+
+m3_txt = get_path("assets/best_hybrid_model_results.txt")
+m3_csv = get_path("assets/best_hybrid_model_results.csv")
+df_m3 = parse_and_save_csv(m3_txt, m3_csv)
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.markdown("#### Legacy UNet")
+    if df_m1 is not None:
+        st.dataframe(df_m1.style.format("{:.4f}"))
+    else:
+        st.info("No data")
+
+with col2:
+    st.markdown("#### ConvLSTM")
+    if df_m2 is not None:
+        st.dataframe(df_m2.style.format("{:.4f}"))
+    else:
+        st.info("No data")
+
+with col3:
+    st.markdown("#### Hybrid Model")
+    if df_m3 is not None:
+        st.dataframe(df_m3.style.format("{:.4f}"))
+    else:
+        st.info("No data")
+
+st.divider()
+
+st.subheader("Model Evaluation Plots")
+tab1, tab2, tab3 = st.tabs(["Legacy UNet", "ConvLSTM", "Hybrid"])
+
+
+def display_model_tab(model_name, display_name):
+    st.markdown(f"### {display_name}")
+
+    col1, col2 = st.columns(2)
+
+    # Paths
+    curves_path = get_path(f"assets/{model_name}_curves.png")
+    visual_path = get_path(f"assets/{model_name}_visual.png")
+
+    # Display Curves
+    if os.path.exists(curves_path):
+        col1.image(curves_path, caption="Performance Curves")
+    else:
+        col1.info(f"No curves plot found at {curves_path}.")
+
+    # Display Visual Sample
+    if os.path.exists(visual_path):
+        col2.image(visual_path, caption="Sample Prediction")
+    else:
+        col2.info(f"No visual sample found at {visual_path}.")
+
+
+with tab1:
+    display_model_tab("best_fire_unet", "Legacy UNet (Spatial Only)")
+
+with tab2:
+    display_model_tab("best_convlstm", "ConvLSTM (Spatiotemporal Sequence)")
+
+with tab3:
+    display_model_tab("best_hybrid_model", "Hybrid Model (ConvLSTM + UNet)")
+
 st.divider()
 
 if os.path.exists(FINAL_MASTER_PATH):
@@ -131,12 +254,17 @@ try:
 except:
     pass
 
-if os.path.exists("dataset/DEM/dem_plot.png"):
-    st.image("dataset/DEM/dem_plot.png", caption="Elevation")
-if os.path.exists("dataset/GHS/ghs_downsampled_plot.png"):
-    st.image("dataset/GHS/ghs_downsampled_plot.png", caption="Settlements")
-if os.path.exists("dataset/LULC/lulc.png"):
-    st.image("dataset/LULC/lulc.png", caption="Land Use")
+dem_path = get_path("dataset/DEM/dem_plot.png")
+if os.path.exists(dem_path):
+    st.image(dem_path, caption="Elevation")
+
+ghs_path = get_path("dataset/GHS/ghs_downsampled_plot.png")
+if os.path.exists(ghs_path):
+    st.image(ghs_path, caption="Settlements")
+
+lulc_path = get_path("dataset/LULC/lulc.png")
+if os.path.exists(lulc_path):
+    st.image(lulc_path, caption="Land Use")
 
 st.subheader("Original ERA5-Land")
 st.dataframe(get_data_safe(ERA5_PATH))

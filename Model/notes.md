@@ -57,3 +57,26 @@ East Longitude: 81.1° E
 
 - A max pooling layer reduces the spatial size of an image or feature map by dividing it into a grid of smaller regions and selecting the maximum value from each region to form a new, compressed representation.
 - This downsampling process makes the network more efficient by decreasing the computational load and memory requirements, helps prevent overfitting, and provides a degree of translation invariance, allowing the network to recognize features regardless of their exact position.
+
+**1. Performance Curves (`_curves.png`)**
+
+This image contains two plots side-by-side:
+
+*   **Left: ROC Curve (Receiver Operating Characteristic)**
+    *   **X-axis (False Positive Rate):** The proportion of negative pixels (no fire) incorrectly classified as positive (fire).
+    *   **Y-axis (True Positive Rate / Recall):** The proportion of actual fire pixels correctly identified by the model.
+    *   **Interpretation:** A perfect model would go straight up to the top-left corner (0,1). The diagonal line represents a random guess. The **AUC (Area Under Curve)** score summarizes this; 1.0 is perfect, 0.5 is random. This tells you how well the model can distinguish between fire and non-fire pixels across *all possible thresholds*.
+
+*   **Right: Precision-Recall Curve**
+    *   **X-axis (Recall):** How many of the *actual* fires did we find? (Same as True Positive Rate).
+    *   **Y-axis (Precision):** Of all the fires we predicted, how many were *actually* fires?
+    *   **Interpretation:** This is crucial for imbalanced datasets like forest fires (where most pixels are *not* fire). A high curve towards the top-right corner is better. It shows the trade-off: to catch more fires (high recall), you usually have to accept more false alarms (lower precision).
+
+**2. Visual Sample (`_visual.png`)**
+
+This image shows a qualitative "sanity check" of the model's performance on a single example:
+
+*   **Left: Input (Channel 0):** This visualizes one of the input features fed into the model (usually temperature or a moisture index). It gives context to the scene.
+*   **Middle: Target Fire:** This is the "Ground Truth". The yellow/orange areas are where the fire *actually* occurred (according to the satellite data).
+*   **Right: Prediction:** This is what the model *predicted*. Brighter/hotter colors indicate a higher probability of fire.
+    *   **Interpretation:** Compare the Middle and Right images. Does the model's prediction shape match the actual fire? Is it missing areas (false negatives) or hallucinating fire where there is none (false positives)?
