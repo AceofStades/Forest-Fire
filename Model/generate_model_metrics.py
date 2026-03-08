@@ -31,14 +31,15 @@ from src.models import UNet
 
 # Constants
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MASTER_PATH = "dataset/final_feature_stack_MASTER.nc"
+# NOTE: MASTER.nc has a static MODIS_FIRE_T1 — broken for training/eval. Use DYNAMIC_new.
+DYNAMIC_PATH = "dataset/final_feature_stack_DYNAMIC_new.nc"
 OUTPUT_CSV = "weights/model_metrics.csv"
 WEIGHTS_DIR = "weights"
 
 # --- 2. Monkey Patching ---
-src.dataset.INPUT_NC_PATH = MASTER_PATH
-legacy.data_utils_seq.INPUT_NC_PATH = MASTER_PATH
-legacy.data_utils_hybrid.INPUT_NC_PATH = MASTER_PATH
+src.dataset.INPUT_NC_PATH = DYNAMIC_PATH
+legacy.data_utils_seq.INPUT_NC_PATH = DYNAMIC_PATH
+legacy.data_utils_hybrid.INPUT_NC_PATH = DYNAMIC_PATH
 legacy.data_utils_hybrid.CACHE_PATH = "stats_cache_hybrid.pkl"
 
 

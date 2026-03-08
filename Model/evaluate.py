@@ -28,12 +28,14 @@ from src.utils import calculate_accuracy, compute_metrics
 
 # Constants
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MASTER_PATH = "dataset/final_feature_stack_MASTER.nc"
+# NOTE: MASTER.nc has a static MODIS_FIRE_T1 (same frame at every timestep) — do NOT use for eval.
+# DYNAMIC_new.nc is the valid merged dataset with real temporal fire variation.
+DYNAMIC_PATH = "dataset/final_feature_stack_DYNAMIC_new.nc"
 
 # --- 2. Monkey Patching ---
-src.dataset.INPUT_NC_PATH = MASTER_PATH
-legacy.data_utils_seq.INPUT_NC_PATH = MASTER_PATH
-legacy.data_utils_hybrid.INPUT_NC_PATH = MASTER_PATH
+src.dataset.INPUT_NC_PATH = DYNAMIC_PATH
+legacy.data_utils_seq.INPUT_NC_PATH = DYNAMIC_PATH
+legacy.data_utils_hybrid.INPUT_NC_PATH = DYNAMIC_PATH
 legacy.data_utils_hybrid.CACHE_PATH = "stats_cache_hybrid.pkl"
 
 

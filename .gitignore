@@ -304,3 +304,5 @@ Model/dataset
 Model/vishal-datasets
 
 *.pth
+#Model/checkouts/
+checkouts/
