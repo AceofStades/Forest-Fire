@@ -1,13 +1,12 @@
 import argparse
+import csv
 import os
 import sys
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.metrics import auc, precision_recall_curve, roc_curve
 from tqdm import tqdm
 
 # --- 1. Path Setup ---
@@ -17,326 +16,209 @@ os.chdir(SCRIPT_DIR)  # Switch CWD to .../Forest-Fire/Model
 if SCRIPT_DIR not in sys.path:
     sys.path.append(SCRIPT_DIR)
 
-# Imports
-import legacy.data_utils_hybrid
-import legacy.data_utils_seq
+# Strictly use new modules
 import src.dataset
-from legacy.convlstm_model import ConvLSTM
-from legacy.hybrid_model import HybridConvLSTMUNet
-from src.models import UNet
-from src.utils import calculate_accuracy, compute_metrics
+from src.models import AttentionUNet, ConvLSTMFireNet, HybridFireNet, UNet
 
 # Constants
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# NOTE: MASTER.nc has a static MODIS_FIRE_T1 (same frame at every timestep) — do NOT use for eval.
-# DYNAMIC_new.nc is the valid merged dataset with real temporal fire variation.
 DYNAMIC_PATH = "dataset/final_feature_stack_DYNAMIC_new.nc"
 
-# --- 2. Monkey Patching ---
+# Patch dataset path
 src.dataset.INPUT_NC_PATH = DYNAMIC_PATH
-legacy.data_utils_seq.INPUT_NC_PATH = DYNAMIC_PATH
-legacy.data_utils_hybrid.INPUT_NC_PATH = DYNAMIC_PATH
-legacy.data_utils_hybrid.CACHE_PATH = "stats_cache_hybrid.pkl"
-
-
-# --- 3. Legacy Model Definition ---
-def double_conv(in_channels, out_channels):
-    return nn.Sequential(
-        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-        nn.ReLU(inplace=True),
-        nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-        nn.ReLU(inplace=True),
-    )
-
-
-class LegacyUNet(nn.Module):
-    def __init__(self, in_channels, out_channels=1):
-        super().__init__()
-        self.dconv_down1 = double_conv(in_channels, 64)
-        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.dconv_down2 = double_conv(64, 128)
-        self.dconv_down3 = double_conv(128, 256)
-        self.dconv_down4 = double_conv(256, 512)
-        self.dconv_bottom = double_conv(512, 1024)
-        self.upconv_up1 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)
-        self.dconv_up1 = double_conv(1024, 512)
-        self.upconv_up2 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
-        self.dconv_up2 = double_conv(512, 256)
-        self.upconv_up3 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
-        self.dconv_up3 = double_conv(256, 128)
-        self.upconv_up4 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
-        self.dconv_up4 = double_conv(128, 64)
-        self.conv_last = nn.Conv2d(64, out_channels, kernel_size=1)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        conv1 = self.dconv_down1(x)
-        x = self.maxpool(conv1)
-        conv2 = self.dconv_down2(x)
-        x = self.maxpool(conv2)
-        conv3 = self.dconv_down3(x)
-        x = self.maxpool(conv3)
-        conv4 = self.dconv_down4(x)
-        x = self.maxpool(conv4)
-        u = self.dconv_bottom(x)
-        u = self.upconv_up1(u)
-        u = torch.cat([u, conv4], dim=1)
-        u = self.dconv_up1(u)
-        u = self.upconv_up2(u)
-        u = torch.cat([u, conv3], dim=1)
-        u = self.dconv_up2(u)
-        u = self.upconv_up3(u)
-        u = torch.cat([u, conv2], dim=1)
-        u = self.dconv_up3(u)
-        u = self.upconv_up4(u)
-        u = torch.cat([u, conv1], dim=1)
-        u = self.dconv_up4(u)
-        out = self.conv_last(u)
-        return self.sigmoid(out)
 
 
 def get_model_and_loader(model_path):
     model_name = Path(model_path).stem
 
-    # Heuristic based on filename
     if "hybrid" in model_name:
-        print("Detected HYBRID model architecture.")
-        # Ensure correct cache usage
-        if not os.path.exists("stats_cache_hybrid.pkl"):
-            print("Computing hybrid stats (this may take a moment)...")
-
-        _, val_loader, in_channels = legacy.data_utils_hybrid.load_hybrid_data(
-            batch_size=8, seq_len=3, lead_time=8, split_mode="spatial"
+        seq_len = 4 if "_s4" in model_name else 6
+        include_fire_input = "_fi" in model_name
+        _, val_loader, in_channels = src.dataset.load_seq_data(
+            batch_size=16, seq_len=seq_len, include_fire_input=include_fire_input
         )
-        model = HybridConvLSTMUNet(in_channels=in_channels)
-        return model, val_loader, "hybrid"
+        model = HybridFireNet(in_channels=in_channels, n_classes=1, base_filters=32)
+        return model, val_loader
 
-    elif "convlstm" in model_name:
-        print("Detected CONVLSTM model architecture.")
-        _, val_loader, in_channels = legacy.data_utils_seq.load_seq_data(
-            batch_size=8, seq_len=3
+    elif "lstm" in model_name or "convlstm" in model_name:
+        seq_len = 4 if "_s4" in model_name else 6
+        include_fire_input = "_fi" in model_name
+        _, val_loader, in_channels = src.dataset.load_seq_data(
+            batch_size=16, seq_len=seq_len, include_fire_input=include_fire_input
         )
-        model = ConvLSTM(in_channels=in_channels, hidden_dims=[32, 32, 32])
-        return model, val_loader, "convlstm"
+        model = ConvLSTMFireNet(
+            in_channels=in_channels, n_classes=1, hidden_dims=[64, 64]
+        )
+        return model, val_loader
 
-    elif "fire_unet" in model_name:
-        print("Detected LEGACY UNET model architecture.")
-        _, val_loader, in_channels = src.dataset.load_split_data(batch_size=16)
-        model = LegacyUNet(in_channels=in_channels, out_channels=1)
-        return model, val_loader, "legacy_unet"
+    elif "attn" in model_name:
+        include_fire_input = "_fi" in model_name
+        _, val_loader, in_channels = src.dataset.load_split_data(
+            batch_size=32, include_fire_input=include_fire_input
+        )
+        model = AttentionUNet(n_channels=in_channels, n_classes=1, base_filters=32)
+        return model, val_loader
 
     else:
-        print("Detected STANDARD UNET model architecture.")
-        _, val_loader, in_channels = src.dataset.load_split_data(batch_size=16)
+        _, val_loader, in_channels = src.dataset.load_split_data(batch_size=32)
         model = UNet(n_channels=in_channels, n_classes=1)
-        return model, val_loader, "unet"
+        return model, val_loader
 
 
-def evaluate(model_path, output_dir):
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+EVAL_THRESHOLDS = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5]
+
+
+def evaluate(model_path):
     model_name = Path(model_path).stem
-
-    print(f"Evaluating model: {model_path}")
+    print(f"\nEvaluating {model_name}...")
 
     try:
-        model, val_loader, arch_type = get_model_and_loader(model_path)
+        model, val_loader = get_model_and_loader(model_path)
     except Exception as e:
         print(f"Failed to setup model/loader: {e}")
-        return
+        return None
 
     model = model.to(DEVICE)
-
     try:
         model.load_state_dict(torch.load(model_path, map_location=DEVICE))
-        print("Weights loaded successfully.")
     except Exception as e:
-        print(f"Error loading model weights: {e}")
-        print("Attempting Strict=False loading as fallback...")
         try:
             model.load_state_dict(
                 torch.load(model_path, map_location=DEVICE), strict=False
             )
-            print("Weights loaded with strict=False.")
         except Exception as e2:
-            print(f"Still failed: {e2}")
-            return
+            print(f"Failed to load weights: {e2}")
+            return None
 
     model.eval()
 
-    total_iou, total_rec, total_acc = 0, 0, 0
-    total_prec, total_f1 = 0, 0
-    all_probs_list, all_targets_list = [], []
+    thr_acc = {t: [0.0, 0.0, 0.0] for t in EVAL_THRESHOLDS}  # tp, fp, fn
+    global_max_prob = 0.0
 
-    print("Running Inference...")
     with torch.no_grad():
-        for inputs, targets in tqdm(val_loader):
-            inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
-
+        for inputs, targets in val_loader:
+            inputs, targets = (
+                inputs.to(DEVICE, non_blocking=True),
+                targets.to(DEVICE, non_blocking=True),
+            )
             if torch.isnan(inputs).any():
                 continue
 
-            logits = model(inputs)
-
-            if arch_type == "legacy_unet":
-                probs = logits
-                # IMPORTANT: compute_metrics expects logits (it does sigmoid internally)
-                # But LegacyUNet output IS ALREADY probabilities (Sigmoid applied).
-                # So we must INVERSE sigmoid or modify compute_metrics behavior.
-                # Easiest: Provide logit-like values to compute_metrics
-                logits_for_metrics = torch.logit(probs.clamp(min=1e-6, max=1 - 1e-6))
-            else:
+            with torch.amp.autocast("cuda"):
+                logits = model(inputs)
                 probs = torch.sigmoid(logits)
-                logits_for_metrics = logits
 
-            # Calculate Standard Metrics
-            # Note: compute_metrics returns (iou, recall, max_conf) - wait,
-            # checking src/utils.py again:
-            # def compute_metrics(pred_logits, target, threshold=0.3):
-            # returns iou, rec, max_conf
-            # BUT in previous code I saw iou, rec, acc = compute_metrics(...)
-            # src/utils.py says "Returns: IoU, Recall, Accuracy, Max_Confidence" in docstring but
-            # code returns: return iou, rec, max_conf.
-            # Wait, let's verify what `src/utils.py` actually returns.
-            # It returns THREE values: iou, rec, max_conf.
-            # My previous evaluate.py unpacks 3 values: iou, rec, acc.
-            # This means `acc` variable was holding `max_conf`! That explains why it was 0.98+ often.
-            # I should calculate Accuracy properly using calculate_accuracy.
+            batch_max = probs.max().item()
+            if batch_max > global_max_prob:
+                global_max_prob = batch_max
 
-            iou, rec, _ = compute_metrics(logits_for_metrics, targets, threshold=0.5)
-            acc = calculate_accuracy(logits_for_metrics, targets, threshold=0.5)
+            probs_flat = probs.view(-1)
+            targets_flat = targets.view(-1)
 
-            # Calculate Precision and F1 manually for the batch
-            pred_bin = (probs > 0.5).float()
-            tp = (pred_bin * targets).sum().item()
-            fp = (pred_bin * (1 - targets)).sum().item()
-            fn = ((1 - pred_bin) * targets).sum().item()
+            for t in EVAL_THRESHOLDS:
+                pred = (probs_flat > t).float()
+                tp = (pred * targets_flat).sum().item()
+                fp = (pred * (1 - targets_flat)).sum().item()
+                fn = ((1 - pred) * targets_flat).sum().item()
 
-            precision = tp / (tp + fp + 1e-6)
-            f1 = 2 * tp / (2 * tp + fp + fn + 1e-6)
+                thr_acc[t][0] += tp
+                thr_acc[t][1] += fp
+                thr_acc[t][2] += fn
 
-            total_iou += iou
-            total_rec += rec
-            total_acc += acc
-            total_prec += precision
-            total_f1 += f1
+    best_f1, best_metrics = -1.0, None
+    for t in EVAL_THRESHOLDS:
+        tp, fp, fn = thr_acc[t]
+        pr = tp / (tp + fp + 1e-8)
+        rc = tp / (tp + fn + 1e-8)
+        f1 = 2 * pr * rc / (pr + rc + 1e-8)
+        iou = tp / (tp + fp + fn + 1e-8)
 
-            # Subsample for plotting
-            all_probs_list.append(probs.cpu().view(-1)[::100])
-            all_targets_list.append(targets.cpu().view(-1)[::100])
+        if f1 > best_f1:
+            best_f1 = f1
+            best_metrics = {
+                "f1": f1,
+                "iou": iou,
+                "precision": pr,
+                "recall": rc,
+                "threshold": t,
+                "max_prob": global_max_prob,
+            }
 
-    num_batches = len(val_loader)
-    avg_iou = total_iou / num_batches
-    avg_rec = total_rec / num_batches
-    avg_acc = total_acc / num_batches
-    avg_prec = total_prec / num_batches
-    avg_f1 = total_f1 / num_batches
+    if best_metrics is None:
+        best_metrics = {
+            "f1": 0,
+            "iou": 0,
+            "precision": 0,
+            "recall": 0,
+            "threshold": 0.5,
+            "max_prob": global_max_prob,
+        }
 
-    print(f"\nFINAL RESULTS (Thresh=0.5):")
-    print(f"Mean Accuracy:  {avg_acc:.4f}")
-    print(f"Mean Precision: {avg_prec:.4f}")
-    print(f"Mean Recall:    {avg_rec:.4f}")
-    print(f"Mean F1 Score:  {avg_f1:.4f}")
-    print(f"Mean IoU:       {avg_iou:.4f}")
-
-    # Save results to text file
-    with open(output_path / f"{model_name}_results.txt", "w") as f:
-        f.write(f"Model: {model_name}\n")
-        f.write(f"Mean Accuracy:  {avg_acc:.4f}\n")
-        f.write(f"Mean Precision: {avg_prec:.4f}\n")
-        f.write(f"Mean Recall:    {avg_rec:.4f}\n")
-        f.write(f"Mean F1 Score:  {avg_f1:.4f}\n")
-        f.write(f"Mean IoU:       {avg_iou:.4f}\n")
-
-    visualize_sample(
-        model, val_loader, output_path / f"{model_name}_visual.png", arch_type
+    print(
+        f"--> {model_name} | F1={best_metrics['f1']:.5f} | Prec={best_metrics['precision']:.5f} | Rec={best_metrics['recall']:.5f} | Thr={best_metrics['threshold']}"
     )
-
-    # Plots
-    if all_probs_list:
-        all_probs = torch.cat(all_probs_list).numpy()
-        all_targets = torch.cat(all_targets_list).numpy()
-
-        plt.figure(figsize=(12, 5))
-
-        # ROC
-        try:
-            fpr, tpr, _ = roc_curve(all_targets, all_probs)
-            roc_auc = auc(fpr, tpr)
-            plt.subplot(1, 2, 1)
-            plt.plot(fpr, tpr, color="darkorange", lw=2, label=f"AUC = {roc_auc:.2f}")
-            plt.plot([0, 1], [0, 1], color="navy", linestyle="--")
-            plt.title("ROC Curve")
-            plt.legend()
-        except Exception as e:
-            print(f"Could not plot ROC: {e}")
-
-        # PR
-        try:
-            precision, recall, _ = precision_recall_curve(all_targets, all_probs)
-            plt.subplot(1, 2, 2)
-            plt.plot(recall, precision, color="blue", lw=2)
-            plt.title("Precision-Recall Curve")
-        except Exception as e:
-            print(f"Could not plot PR: {e}")
-
-        plt.tight_layout()
-        plt.savefig(output_path / f"{model_name}_curves.png")
-        print(f"Saved reports to {output_path}")
-    else:
-        print("No data collected for plots.")
+    best_metrics["name"] = model_name
+    return best_metrics
 
 
-def visualize_sample(model, loader, save_path, arch_type):
-    print("Generating visual sample...")
-    with torch.no_grad():
-        for x, y in loader:
-            if y.sum() > 50:  # Find a sample with fire
-                x = x.to(DEVICE)
+def main():
+    import glob
 
-                logits = model(x)
-                if arch_type == "legacy_unet":
-                    pred = logits
-                else:
-                    pred = torch.sigmoid(logits)
+    checkouts_dir = Path("checkouts")
+    pth_files = glob.glob(str(checkouts_dir / "*.pth"))
 
-                # Visualization logic
-                if len(x.shape) == 5:  # Sequence data (B, T, C, H, W)
-                    input_img = x[0, -1, 0].cpu().numpy()  # Channel 0
-                else:
-                    input_img = x[0, 0].cpu().numpy()  # Channel 0
+    if not pth_files:
+        print("No .pth files found in checkouts/")
+        return
 
-                target_img = y[0, 0].cpu().numpy()
-                pred_img = pred[0, 0].cpu().numpy()
+    print(f"Found {len(pth_files)} model files. Evaluating all...")
 
-                plt.figure(figsize=(15, 5))
-                plt.subplot(1, 3, 1)
-                plt.imshow(input_img, cmap="inferno")
-                plt.title("Input (Channel 0)")
-                plt.axis("off")
+    results = []
+    for pth in sorted(pth_files):
+        res = evaluate(pth)
+        if res:
+            results.append(res)
 
-                plt.subplot(1, 3, 2)
-                plt.imshow(target_img, cmap="inferno")
-                plt.title("Target Fire")
-                plt.axis("off")
+    if not results:
+        print("No valid results.")
+        return
 
-                plt.subplot(1, 3, 3)
-                plt.imshow(pred_img, cmap="inferno")
-                plt.title("Prediction")
-                plt.axis("off")
+    results.sort(key=lambda x: x["f1"], reverse=True)
 
-                plt.savefig(save_path)
-                return
+    csv_path = checkouts_dir / "sweep_summary.csv"
+    print(f"\nWriting new summary to {csv_path}")
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "rank",
+                "name",
+                "f1",
+                "iou",
+                "precision",
+                "recall",
+                "threshold",
+                "max_prob",
+            ]
+        )
+        for idx, r in enumerate(results, 1):
+            writer.writerow(
+                [
+                    idx,
+                    r["name"],
+                    f"{r['f1']:.6f}",
+                    f"{r['iou']:.6f}",
+                    f"{r['precision']:.6f}",
+                    f"{r['recall']:.6f}",
+                    r["threshold"],
+                    f"{r['max_prob']:.6f}",
+                ]
+            )
+
+    print("Done! Top 3 models:")
+    for r in results[:3]:
+        print(f" - {r['name']} | F1: {r['f1']:.5f}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-m", "--model", type=str, required=True, help="Path to .pth model file"
-    )
-    parser.add_argument(
-        "-o", "--output", type=str, default="images", help="Output directory for images"
-    )
-    args = parser.parse_args()
-
-    evaluate(args.model, args.output)
+    main()
