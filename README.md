@@ -22,6 +22,8 @@
 
 The system consists of a robust **FastAPI** backend that serves predictions from a PyTorch-based model, and a modern **Next.js** frontend that visualizes data in 2D, offers simulation controls, and provides an interactive dashboard for decision-makers.
 
+> 📚 **Research & Architecture:** Read the comprehensive project documentation, including dataset engineering and model architectures, in the [docs/project_overview.md](./docs/project_overview.md) file.
+
 ## Key Features
 
 *   **Deep Learning Predictions:** Utilizes a U-Net architecture to predict fire spread probability based on environmental factors (temperature, humidity, wind, rain).
