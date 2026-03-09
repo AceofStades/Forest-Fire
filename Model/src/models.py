@@ -81,12 +81,12 @@ class UNet(nn.Module):
         self.down3 = Down(256, 512)
 
         # Bottleneck with Dropout to prevent memorization
-        self.down4 = nn.Sequential(
-            nn.MaxPool2d(2), DoubleConv(512, 1024), nn.Dropout(0.5)
-        )
+        self.down4 = nn.Sequential(nn.MaxPool2d(2), DoubleConv(512, 1024, dropout=0.5))
 
         self.up1 = Up(1024, 512)
+        self.drop1 = nn.Dropout2d(0.3)
         self.up2 = Up(512, 256)
+        self.drop2 = nn.Dropout2d(0.3)
         self.up3 = Up(256, 128)
         self.up4 = Up(128, 64)
         self.outc = nn.Conv2d(64, n_classes, kernel_size=1)
@@ -98,7 +98,9 @@ class UNet(nn.Module):
         x4 = self.down3(x3)
         x5 = self.down4(x4)
         x = self.up1(x5, x4)
+        x = self.drop1(x)
         x = self.up2(x, x3)
+        x = self.drop2(x)
         x = self.up3(x, x2)
         x = self.up4(x, x1)
         return self.outc(x)

@@ -1,10 +1,10 @@
 import argparse
 import os
 import sys
-from pathlib import Path
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(SCRIPT_DIR)
@@ -17,8 +17,15 @@ from src.utils import compute_best_threshold_metrics
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def evaluate_model(model_type, model_path):
-    print(f"\nEvaluating {model_type} from {model_path}...")
+def evaluate_model(model_type):
+    model_path = f"checkouts/best_{model_type}.pth"
+    if not os.path.exists(model_path):
+        print(f"Error: Model weights not found at {model_path}")
+        print(f"Please run `uv run train.py --model {model_type}` first.")
+        return
+
+    print(f"\n--- Evaluating {model_type.upper()} ---")
+    print(f"Loading weights from {model_path}...")
 
     if model_type == "unet":
         _, val_loader, in_channels = src.dataset.load_split_data(
@@ -42,12 +49,14 @@ def evaluate_model(model_type, model_path):
     model = model.to(DEVICE)
     model.eval()
 
-    val_f1_accum = 0.0
-    val_batches = 0
-    all_metrics = []
+    print("\nCalculating metrics across validation set...")
+
+    # We will test thresholds from 0.05 to 0.5 to find the best operating point
+    thresholds = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5]
+    metrics_per_thr = {t: {"tp": 0, "fp": 0, "fn": 0} for t in thresholds}
 
     with torch.no_grad():
-        for inputs, targets in val_loader:
+        for inputs, targets in tqdm(val_loader, desc="Evaluating Batches"):
             inputs, targets = (
                 inputs.to(DEVICE, non_blocking=True),
                 targets.to(DEVICE, non_blocking=True),
@@ -56,50 +65,41 @@ def evaluate_model(model_type, model_path):
                 continue
 
             with torch.amp.autocast("cuda"):
-                logits = model(inputs)
-
-            metrics = compute_best_threshold_metrics(logits, targets)
-            all_metrics.append(metrics)
-            val_f1_accum += metrics["f1"]
-            val_batches += 1
-
-    avg_f1 = val_f1_accum / max(1, val_batches)
-
-    # Calculate average metrics across all batches for best threshold
-    # Note: A proper global evaluation would accumulate TP/FP/FN across all batches first.
-    # But for a quick summary, average is fine. Let's do a quick global evaluation.
-
-    global_tp, global_fp, global_fn = 0, 0, 0
-    best_thr = 0.5
-    # Finding majority best threshold across batches
-    if all_metrics:
-        best_thr = max(
-            set([m["threshold"] for m in all_metrics]),
-            key=[m["threshold"] for m in all_metrics].count,
-        )
-
-    print(f"Global Eval at Threshold {best_thr}:")
-    with torch.no_grad():
-        for inputs, targets in val_loader:
-            inputs, targets = (
-                inputs.to(DEVICE, non_blocking=True),
-                targets.to(DEVICE, non_blocking=True),
-            )
-            with torch.amp.autocast("cuda"):
                 probs = torch.sigmoid(model(inputs))
-            pred = (probs > best_thr).float()
-            global_tp += (pred * targets).sum().item()
-            global_fp += (pred * (1 - targets)).sum().item()
-            global_fn += ((1 - pred) * targets).sum().item()
 
-    precision = global_tp / (global_tp + global_fp + 1e-8)
-    recall = global_tp / (global_tp + global_fn + 1e-8)
-    f1 = 2 * precision * recall / (precision + recall + 1e-8)
+            # Move to CPU for metric calculation to avoid massive VRAM usage
+            probs_np = probs.cpu().numpy()
+            targets_np = targets.cpu().numpy()
 
-    print(
-        f"--> {model_type} | F1={f1:.5f} | Prec={precision:.5f} | Rec={recall:.5f} | Thr={best_thr}"
-    )
-    return f1
+            for t in thresholds:
+                pred = (probs_np > t).astype(np.float32)
+                metrics_per_thr[t]["tp"] += (pred * targets_np).sum()
+                metrics_per_thr[t]["fp"] += (pred * (1 - targets_np)).sum()
+                metrics_per_thr[t]["fn"] += ((1 - pred) * targets_np).sum()
+
+    print("\n--- RESULTS ---")
+    best_f1 = -1.0
+    best_stats = {}
+
+    for t in thresholds:
+        tp = metrics_per_thr[t]["tp"]
+        fp = metrics_per_thr[t]["fp"]
+        fn = metrics_per_thr[t]["fn"]
+
+        pr = tp / (tp + fp + 1e-8)
+        rc = tp / (tp + fn + 1e-8)
+        f1 = 2 * pr * rc / (pr + rc + 1e-8)
+        iou = tp / (tp + fp + fn + 1e-8)
+
+        if f1 > best_f1:
+            best_f1 = f1
+            best_stats = {"thr": t, "f1": f1, "pr": pr, "rc": rc, "iou": iou}
+
+    print(f"Optimal Threshold: {best_stats['thr']}")
+    print(f"F1 Score:  {best_stats['f1']:.5f}")
+    print(f"Precision: {best_stats['pr']:.5f}")
+    print(f"Recall:    {best_stats['rc']:.5f}")
+    print(f"IoU:       {best_stats['iou']:.5f}")
 
 
 def main():
@@ -107,9 +107,8 @@ def main():
     parser.add_argument(
         "--model", type=str, required=True, choices=["unet", "convlstm"]
     )
-    parser.add_argument("--path", type=str, required=True)
     args = parser.parse_args()
-    evaluate_model(args.model, args.path)
+    evaluate_model(args.model)
 
 
 if __name__ == "__main__":

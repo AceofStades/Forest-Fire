@@ -8,17 +8,17 @@ import torch.optim as optim
 from src.dataset import load_seq_data, load_split_data
 from src.models import ConvLSTMFireNet, UNet
 from src.utils import CombinedLoss, compute_best_threshold_metrics
-from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
 # --- CONFIG ---
 NUM_EPOCHS = 30
 LEARNING_RATE = 1e-3
 BATCH_SIZE = 16
-ACCUMULATION_STEPS = 4
+ACCUMULATION_STEPS = 8
 
 
 def train(model_type="unet"):
+    global ACCUMULATION_STEPS
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training on device: {device}")
 
@@ -35,10 +35,15 @@ def train(model_type="unet"):
             fire_oversample_ratio=50.0,
             include_fire_input=True,  # CRITICAL: UNet needs to see current fire!
         )
-        model = UNet(n_channels=in_channels, n_classes=1).to(device)
+        model = UNet(n_channels=in_channels, n_classes=1)
+        model = model.to(device)
     elif model_type == "convlstm":
+        # ConvLSTM requires extremely low batch size to prevent OOM
+        conv_batch_size = 2
+        conv_accum_steps = BATCH_SIZE * ACCUMULATION_STEPS // conv_batch_size
+
         train_loader, val_loader, in_channels = load_seq_data(
-            batch_size=BATCH_SIZE,
+            batch_size=conv_batch_size,
             seq_len=4,
             weighted_sampling=True,
             fire_oversample_ratio=50.0,
@@ -47,6 +52,7 @@ def train(model_type="unet"):
         model = ConvLSTMFireNet(
             in_channels=in_channels, n_classes=1, hidden_dims=[64, 64]
         ).to(device)
+        ACCUMULATION_STEPS = conv_accum_steps  # Update global for the loop
     else:
         raise ValueError("Invalid model type. Choose 'unet' or 'convlstm'.")
 
@@ -56,9 +62,9 @@ def train(model_type="unet"):
     criterion = CombinedLoss(alpha=0.5, focal_alpha=0.95, focal_gamma=2.0).to(device)
 
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
-    scaler = GradScaler()
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=2
+    scaler = torch.amp.GradScaler("cuda")
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=5, T_mult=2, eta_min=1e-6
     )
 
     best_val_f1 = -1.0
@@ -81,7 +87,7 @@ def train(model_type="unet"):
             if torch.isnan(inputs).any():
                 continue
 
-            with autocast():
+            with torch.amp.autocast("cuda"):
                 logits = model(inputs)
                 loss = criterion(logits, labels)
                 loss = loss / ACCUMULATION_STEPS
@@ -112,7 +118,7 @@ def train(model_type="unet"):
                     labels.to(device, non_blocking=True),
                 )
 
-                with autocast():
+                with torch.amp.autocast("cuda"):
                     logits = model(inputs)
                     v_loss = criterion(logits, labels)
                     val_loss += v_loss.item()
@@ -124,7 +130,7 @@ def train(model_type="unet"):
         avg_val_loss = val_loss / max(1, val_batches)
         avg_val_f1 = val_f1_accum / max(1, val_batches)
 
-        scheduler.step(avg_val_f1)
+        scheduler.step()
 
         print(f"\nEpoch {epoch + 1} Summary:")
         print(f"  Train Loss: {train_loss / len(train_loader):.4f}")
