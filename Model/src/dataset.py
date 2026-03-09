@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 # --- CONFIGURATION ---
-INPUT_NC_PATH = "dataset/final_feature_stack_DYNAMIC_new.nc"
+INPUT_NC_PATH = "dataset/final_feature_stack_DYNAMIC_interpolated.nc"
 CACHE_PATH = "stats_cache.pkl"
 
 
@@ -110,6 +110,7 @@ class FireSeqDataset(Dataset):
 
 # ---- Shared helpers ----
 
+
 def _resolve_path(nc_path):
     """Try to find the dataset file."""
     if os.path.exists(nc_path):
@@ -140,8 +141,15 @@ def _compute_global_stats(ds_loaded, feature_vars, cache_path):
 
     for i, var in enumerate(tqdm(feature_vars, desc="Analyzing Channels")):
         data = ds_loaded[var].values
-        mins[i] = np.nanpercentile(data, 2)
-        maxs[i] = np.nanpercentile(data, 98)
+        if var in ["MODIS_FIRE_T1", "Burn_Scar"]:
+            # These are binary/sparse, 98th percentile is often 0
+            mins[i] = 0.0
+            maxs[i] = 1.0
+        else:
+            mins[i] = np.nanpercentile(data, 2)
+            maxs[i] = np.nanpercentile(data, 98)
+            if maxs[i] == mins[i]:
+                maxs[i] = np.nanmax(data)
 
     stats = {"min": mins.astype(np.float32), "max": maxs.astype(np.float32)}
     with open(cache_path, "wb") as f:
@@ -151,20 +159,29 @@ def _compute_global_stats(ds_loaded, feature_vars, cache_path):
 
 def _load_ds(nc_path=None, include_fire_input=False):
     """Load dataset into RAM. Returns (ds_loaded, feature_vars, total_steps).
-    If include_fire_input=True, MODIS_FIRE_T1 at time T is included as a feature
-    (autoregressive mode — helps the model learn fire dynamics)."""
+    If include_fire_input=True, MODIS_FIRE_T1 at time T is included as a feature.
+    Also dynamically calculates a Burn_Scar feature which is 1 if the pixel has ever been on fire."""
     path = _resolve_path(nc_path or INPUT_NC_PATH)
     print(f"--- Loading dataset into RAM ({path}) ---")
     with xr.open_dataset(path, engine="h5netcdf", chunks=None) as ds:
         ds_loaded = ds.load()
+
+        # Calculate Burn_Scar
+        print("--- Calculating Burn_Scar (cumulative fire history) ---")
+        burn_scar = ds_loaded["MODIS_FIRE_T1"].cumsum(dim="valid_time")
+        burn_scar = xr.where(burn_scar > 0, 1.0, 0.0).astype(np.float32)
+        ds_loaded["Burn_Scar"] = burn_scar
+
         if include_fire_input:
             feature_vars = list(ds.data_vars)
         else:
-            feature_vars = [v for v in ds.data_vars if v != "MODIS_FIRE_T1"]
-        total_steps = ds.sizes["valid_time"]
+            feature_vars = [v for v in ds_loaded.data_vars if v != "MODIS_FIRE_T1"]
+        total_steps = ds_loaded.sizes["valid_time"]
     fire_frames = int((ds_loaded["MODIS_FIRE_T1"].values.sum(axis=(1, 2)) > 0).sum())
-    print(f"--- Loaded: {total_steps} steps, {len(feature_vars)} features, "
-          f"{fire_frames} fire frames ({100*fire_frames/total_steps:.1f}%) ---")
+    print(
+        f"--- Loaded: {total_steps} steps, {len(feature_vars)} features, "
+        f"{fire_frames} fire frames ({100 * fire_frames / total_steps:.1f}%) ---"
+    )
     if include_fire_input:
         print("--- MODIS_FIRE_T1 included as input feature (autoregressive mode) ---")
     return ds_loaded, feature_vars, total_steps
@@ -190,16 +207,24 @@ def _compute_sample_weights(ds_loaded, indices, fire_oversample_ratio=10.0):
         else:
             weights.append(1.0)
 
-    print(f"--- Weighted sampling: {n_fire}/{len(indices)} fire-target frames "
-          f"({100 * n_fire / max(len(indices), 1):.1f}%), "
-          f"oversample_ratio={fire_oversample_ratio} ---")
+    print(
+        f"--- Weighted sampling: {n_fire}/{len(indices)} fire-target frames "
+        f"({100 * n_fire / max(len(indices), 1):.1f}%), "
+        f"oversample_ratio={fire_oversample_ratio} ---"
+    )
     return torch.DoubleTensor(weights)
 
 
 # ---- Public loaders ----
 
-def load_split_data(batch_size=32, nc_path=None, weighted_sampling=False,
-                    fire_oversample_ratio=10.0, include_fire_input=False):
+
+def load_split_data(
+    batch_size=32,
+    nc_path=None,
+    weighted_sampling=False,
+    fire_oversample_ratio=10.0,
+    include_fire_input=False,
+):
     """Single-frame loader for UNet / AttentionUNet.
 
     Args:
@@ -207,8 +232,14 @@ def load_split_data(batch_size=32, nc_path=None, weighted_sampling=False,
         fire_oversample_ratio: weight multiplier for fire frames in sampler.
         include_fire_input: include MODIS_FIRE_T1 at time T as an input channel.
     """
-    ds_loaded, feature_vars, total_steps = _load_ds(nc_path, include_fire_input=include_fire_input)
-    cache = CACHE_PATH if nc_path is None else CACHE_PATH.replace(".pkl", f"_{hash(nc_path) % 10000}.pkl")
+    ds_loaded, feature_vars, total_steps = _load_ds(
+        nc_path, include_fire_input=include_fire_input
+    )
+    cache = (
+        CACHE_PATH
+        if nc_path is None
+        else CACHE_PATH.replace(".pkl", f"_{hash(nc_path) % 10000}.pkl")
+    )
     if include_fire_input:
         cache = cache.replace(".pkl", "_fi.pkl")
     stats = _compute_global_stats(ds_loaded, feature_vars, cache)
@@ -222,30 +253,61 @@ def load_split_data(batch_size=32, nc_path=None, weighted_sampling=False,
     nw = min(8, os.cpu_count() or 4)
 
     if weighted_sampling:
-        train_weights = _compute_sample_weights(ds_loaded, train_idx, fire_oversample_ratio)
-        sampler = WeightedRandomSampler(train_weights, num_samples=len(train_weights), replacement=True)
+        train_weights = _compute_sample_weights(
+            ds_loaded, train_idx, fire_oversample_ratio
+        )
+        sampler = WeightedRandomSampler(
+            train_weights, num_samples=len(train_weights), replacement=True
+        )
         train_loader = DataLoader(
-            train_ds, batch_size=batch_size, sampler=sampler,
-            num_workers=nw, pin_memory=True, prefetch_factor=4, persistent_workers=True,
+            train_ds,
+            batch_size=batch_size,
+            sampler=sampler,
+            num_workers=nw,
+            pin_memory=True,
+            prefetch_factor=4,
+            persistent_workers=True,
         )
     else:
         train_loader = DataLoader(
-            train_ds, batch_size=batch_size, shuffle=True,
-            num_workers=nw, pin_memory=True, prefetch_factor=4, persistent_workers=True,
+            train_ds,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=nw,
+            pin_memory=True,
+            prefetch_factor=4,
+            persistent_workers=True,
         )
 
     val_loader = DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False,
-        num_workers=nw, pin_memory=True, prefetch_factor=2, persistent_workers=True,
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=nw,
+        pin_memory=True,
+        prefetch_factor=2,
+        persistent_workers=True,
     )
     return train_loader, val_loader, len(feature_vars)
 
 
-def load_seq_data(batch_size=4, seq_len=4, nc_path=None, weighted_sampling=False,
-                  fire_oversample_ratio=10.0, include_fire_input=False):
+def load_seq_data(
+    batch_size=4,
+    seq_len=4,
+    nc_path=None,
+    weighted_sampling=False,
+    fire_oversample_ratio=10.0,
+    include_fire_input=False,
+):
     """Sequence loader for ConvLSTM / Hybrid. Returns (B, T, C, H, W) batches."""
-    ds_loaded, feature_vars, total_steps = _load_ds(nc_path, include_fire_input=include_fire_input)
-    cache = CACHE_PATH if nc_path is None else CACHE_PATH.replace(".pkl", f"_{hash(nc_path) % 10000}.pkl")
+    ds_loaded, feature_vars, total_steps = _load_ds(
+        nc_path, include_fire_input=include_fire_input
+    )
+    cache = (
+        CACHE_PATH
+        if nc_path is None
+        else CACHE_PATH.replace(".pkl", f"_{hash(nc_path) % 10000}.pkl")
+    )
     if include_fire_input:
         cache = cache.replace(".pkl", "_fi.pkl")
     stats = _compute_global_stats(ds_loaded, feature_vars, cache)
@@ -259,20 +321,33 @@ def load_seq_data(batch_size=4, seq_len=4, nc_path=None, weighted_sampling=False
     nw = min(8, os.cpu_count() or 4)
 
     if weighted_sampling:
-        train_weights = _compute_sample_weights(ds_loaded, train_idx, fire_oversample_ratio)
-        sampler = WeightedRandomSampler(train_weights, num_samples=len(train_weights), replacement=True)
+        train_weights = _compute_sample_weights(
+            ds_loaded, train_idx, fire_oversample_ratio
+        )
+        sampler = WeightedRandomSampler(
+            train_weights, num_samples=len(train_weights), replacement=True
+        )
         train_loader = DataLoader(
-            train_ds, batch_size=batch_size, sampler=sampler,
-            num_workers=nw, pin_memory=True,
+            train_ds,
+            batch_size=batch_size,
+            sampler=sampler,
+            num_workers=nw,
+            pin_memory=True,
         )
     else:
         train_loader = DataLoader(
-            train_ds, batch_size=batch_size, shuffle=True,
-            num_workers=nw, pin_memory=True,
+            train_ds,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=nw,
+            pin_memory=True,
         )
 
     val_loader = DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False,
-        num_workers=nw, pin_memory=True,
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=nw,
+        pin_memory=True,
     )
     return train_loader, val_loader, len(feature_vars)
