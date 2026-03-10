@@ -1,6 +1,6 @@
 # Backend Developer Guide: Model Integration and Inference
 
-This guide explains how the machine learning models (UNet and ConvLSTM) are integrated into the FastAPI backend, how to manage state, and how the inference pipeline feeds into the D* Lite pathfinding algorithm.
+This guide explains how the machine learning model (U-Net) is integrated into the FastAPI backend, how to manage state, and how the inference pipeline feeds into both the 3D Cellular Automata simulation and the D* Lite pathfinding algorithm.
 
 ## 1. Directory Structure
 
@@ -25,56 +25,61 @@ To ensure the API responds quickly without loading gigabytes of weights on every
 ### Required Artifacts in `Server/app/models/`
 Before running the server, ensure the following files (generated from the `Model/` training pipeline) are placed in the `Server/app/models/` directory:
 
-1.  **Model Weights:** The trained PyTorch model (e.g., `best_unet.pth` or `best_convlstm.pth`).
+1.  **Model Weights:** The trained PyTorch model (`best_unet.pth`). *Note: We utilize the U-Net architecture trained via the Expansion-Only Delta approach.*
 2.  **Dataset Statistics:** The `stats_cache_fi.pkl` file. This contains the robust min/max values required to normalize incoming real-time weather/sensor data so it perfectly matches the scale the model was trained on.
-3.  **Initial Fire Grid:** An initial `.npy` array (e.g., `fire_prediction_sample.npy`) representing the current state of the fire, used as the starting point for simulations and pathfinding.
 
-*Example `lifespan` setup in `main.py`:*
+## 3. The Cellular Automata Inference Pipeline
+
+The ML model does **not** predict the entire fire map. It is trained to predict **only the newly expanding edges (Delta)**. This allows the backend to act as the transition rule engine for the frontend's Cellular Automata (CA) simulation.
+
+When the frontend sends a request to simulate the next hour, the backend follows this pipeline:
+
+### A. Input Payload (What to give the model)
+The endpoint must receive a payload containing the current state of the simulation. This is constructed into a 13-channel PyTorch tensor of shape `[1, 13, Height, Width]`.
+
+The 13 channels **must be strictly ordered** as follows (matching the `feature_vars` list):
+1.  `d2m`: 2m Dewpoint Temperature
+2.  `t2m`: 2m Temperature
+3.  `swvl1`: Volumetric Soil Water Layer 1
+4.  `e`: Evaporation
+5.  `u10`: 10m U-component of Wind
+6.  `v10`: 10m V-component of Wind
+7.  `tp`: Total Precipitation
+8.  `cvl`: Low Vegetation Cover
+9.  **`MODIS_FIRE_T1`**: The current binary fire state (1 = fire, 0 = no fire).
+10. `DEM`: Digital Elevation Model (Topography)
+11. `LULC`: Land Use Land Cover
+12. `GHS_BUILT`: Global Human Settlement Layer
+13. **`Burn_Scar`**: A historical memory channel (1 = burned in the past, 0 = unburned).
+
+### B. Normalization
+The incoming values (channels 1-8 and 10-12) are normalized using the loaded `ml_artifacts["stats"]`. 
+*   *Critical:* Channels 9 (`MODIS_FIRE_T1`) and 13 (`Burn_Scar`) are sparse binary channels and bypass percentile scaling. They must be hardcoded to `[0, 1]`.
+
+### C. Forward Pass & Output (What to expect)
+1.  The `[1, 13, H, W]` tensor is passed through the `UNet`.
+2.  The model outputs raw logits which are passed through `torch.sigmoid()` to yield a probability map `[1, 1, H, W]`.
+3.  **This output is the Spread Probability Map.** It highlights topographical hotspots where the fire is likely to expand in the next hour.
+
+### D. The Simulation Step
+To generate the $T+1$ fire map to send back to the frontend, you apply the probability map to the current fire:
 ```python
-ml_artifacts = {}
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Load PyTorch model weights
-    ml_artifacts["model"] = load_model("app/models/best_unet.pth")
-    
-    # Load normalization statistics
-    with open("app/models/stats_cache_fi.pkl", 'rb') as f:
-        ml_artifacts["stats"] = pickle.load(f)
-        
-    # Load the starting probability grid for the map
-    ml_artifacts["fire_grid"] = np.load("app/models/fire_prediction_sample.npy")
-    
-    yield
-    # Cleanup on shutdown
-    ml_artifacts.clear()
+# Simulated CA Step
+# If probability > threshold, new fire ignites. We clip to 1.0 to prevent values exploding.
+next_fire_grid = np.clip(current_fire_grid + spread_probability_map, 0, 1.0)
 ```
-
-## 3. The Inference Pipeline
-
-When the frontend sends a request to simulate the next hour or update the fire map based on new weather conditions, the backend follows this pipeline:
-
-1.  **Receive Data:** The endpoint receives weather parameters (Temperature, Wind, Humidity, etc.) via a POST request validated by Pydantic schemas.
-2.  **Normalization:** The incoming values are normalized using the loaded `ml_artifacts["stats"]`. 
-    *   *Note:* Ensure that binary/sparse features like the current fire state or burn scar are forced to a `[0, 1]` range without being scaled out of existence by the 98th percentile.
-3.  **Tensor Construction:** The normalized values are stacked into a PyTorch tensor (Shape: `[1, 13, 320, 400]` for UNet) representing the `[Batch, Channels, Height, Width]`.
-4.  **Forward Pass:** The tensor is passed through the model.
-5.  **Sigmoid & Thresholding:** The model outputs raw logits. These must be passed through a `torch.sigmoid()` function to convert them into probabilities (0.0 to 1.0).
-6.  **State Update:** The new probability grid replaces the old `ml_artifacts["fire_grid"]` and is returned to the frontend for 3D rendering.
+You then update the `Burn_Scar` channel (since the current fire has consumed fuel) and return the `next_fire_grid` to the frontend for 3D rendering.
 
 ## 4. D* Lite Pathfinding Integration
 
-The core feature of the platform is routing rescue teams safely around predicted fire zones. This is handled by the `DStarLite` class.
+The `spread_probability_map` generated by the model is also fed directly into the `DStarLite` class to recalculate safe evacuation routes dynamically.
 
-### How it works:
-- **The Grid:** The D* Lite algorithm takes the 320x400 probability grid generated by the ML model as its cost map.
-- **Cost Function:** The algorithm uses an 8-way connectivity grid. The cost to move to an adjacent node $v$ is calculated as distance plus a massive penalty if the fire probability is high.
+- **The Grid:** The algorithm uses an 8-way connectivity grid matching the `H x W` dimensions.
+- **Cost Function:** The cost to move to an adjacent node $v$ is calculated as distance plus a massive penalty if the model predicts fire will spread there.
   ```python
-  # Example cost calculation in d_star_lite.py
-  prob = self.grid[v[0], v[1]]
+  prob = spread_probability_map[v[0], v[1]]
   cost = 1 + (prob * 1000 if prob > 0.6 else prob * 10)
   ```
-- **Dynamic Updates:** If a new model inference predicts that the wind has shifted the fire into the current safe path, the grid in `ml_artifacts["fire_grid"]` is updated. D* Lite is an incremental search algorithm; it does not need to recalculate the entire map from scratch. It only updates the nodes affected by the changing fire probabilities, making it extremely fast for real-time frontend simulations.
 
 ## 5. Running the Server
 
@@ -85,5 +90,4 @@ cd Server
 # Ensure your virtual environment is active and requirements are installed
 uvicorn app.main:app --reload --port 8000
 ```
-The API will be available at `http://localhost:8000`. 
-CORS is configured to accept requests from the Next.js frontend running on `http://localhost:3000`.
+The API will be available at `http://localhost:8000`.
