@@ -53,7 +53,7 @@ def evaluate_model(model_type):
 
     # We will test thresholds from 0.05 to 0.5 to find the best operating point
     thresholds = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5]
-    metrics_per_thr = {t: {"tp": 0, "fp": 0, "fn": 0} for t in thresholds}
+    metrics_per_thr = {t: {"tp": 0, "fp": 0, "fn": 0, "tn": 0} for t in thresholds}
 
     with torch.no_grad():
         for inputs, targets in tqdm(val_loader, desc="Evaluating Batches"):
@@ -76,6 +76,7 @@ def evaluate_model(model_type):
                 metrics_per_thr[t]["tp"] += (pred * targets_np).sum()
                 metrics_per_thr[t]["fp"] += (pred * (1 - targets_np)).sum()
                 metrics_per_thr[t]["fn"] += ((1 - pred) * targets_np).sum()
+                metrics_per_thr[t]["tn"] += ((1 - pred) * (1 - targets_np)).sum()
 
     print("\n--- RESULTS ---")
     best_f1 = -1.0
@@ -85,17 +86,27 @@ def evaluate_model(model_type):
         tp = metrics_per_thr[t]["tp"]
         fp = metrics_per_thr[t]["fp"]
         fn = metrics_per_thr[t]["fn"]
+        tn = metrics_per_thr[t]["tn"]
 
         pr = tp / (tp + fp + 1e-8)
         rc = tp / (tp + fn + 1e-8)
         f1 = 2 * pr * rc / (pr + rc + 1e-8)
         iou = tp / (tp + fp + fn + 1e-8)
+        acc = (tp + tn) / (tp + tn + fp + fn + 1e-8)
 
         if f1 > best_f1:
             best_f1 = f1
-            best_stats = {"thr": t, "f1": f1, "pr": pr, "rc": rc, "iou": iou}
+            best_stats = {
+                "thr": t,
+                "f1": f1,
+                "pr": pr,
+                "rc": rc,
+                "iou": iou,
+                "acc": acc,
+            }
 
     print(f"Optimal Threshold: {best_stats['thr']}")
+    print(f"Accuracy:  {best_stats['acc']:.5f}")
     print(f"F1 Score:  {best_stats['f1']:.5f}")
     print(f"Precision: {best_stats['pr']:.5f}")
     print(f"Recall:    {best_stats['rc']:.5f}")

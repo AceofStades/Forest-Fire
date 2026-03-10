@@ -35,7 +35,12 @@ class FireDataset(Dataset):
             .to_array(dim="channel")
             .values
         )
-        Y_data = self.ds["MODIS_FIRE_T1"].isel(valid_time=t_idx + 1).values
+
+        # TARGET: We want to predict ONLY the newly ignited pixels (the Delta).
+        # This prevents the model from acting as an identity function.
+        current_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=t_idx).values
+        next_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=t_idx + 1).values
+        Y_data = np.clip(next_fire - current_fire, 0, 1)
 
         # Robust Normalization with Clipping
         min_v = self.stats["min"][:, None, None]
@@ -93,7 +98,11 @@ class FireSeqDataset(Dataset):
             frames.append((data - min_v) / denom)
 
         X_seq = np.stack(frames, axis=0)  # (T, C, H, W)
-        Y_data = self.ds["MODIS_FIRE_T1"].isel(valid_time=target_t_idx + 1).values
+
+        # TARGET: We want to predict ONLY the newly ignited pixels (the Delta).
+        current_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=target_t_idx).values
+        next_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=target_t_idx + 1).values
+        Y_data = np.clip(next_fire - current_fire, 0, 1)
 
         X_tensor = torch.from_numpy(X_seq).float()
         Y_tensor = torch.from_numpy(Y_data).float().unsqueeze(0)
@@ -173,7 +182,7 @@ def _load_ds(nc_path=None, include_fire_input=False):
         ds_loaded["Burn_Scar"] = burn_scar
 
         if include_fire_input:
-            feature_vars = list(ds.data_vars)
+            feature_vars = list(ds_loaded.data_vars)
         else:
             feature_vars = [v for v in ds_loaded.data_vars if v != "MODIS_FIRE_T1"]
         total_steps = ds_loaded.sizes["valid_time"]
@@ -190,27 +199,44 @@ def _load_ds(nc_path=None, include_fire_input=False):
 def _compute_sample_weights(ds_loaded, indices, fire_oversample_ratio=10.0):
     """Per-sample weights for WeightedRandomSampler.
 
-    Fire-target frames (where MODIS_FIRE_T1 at t+1 has any fire) get
-    ``fire_oversample_ratio`` weight; non-fire frames get 1.0.
-    With ratio=10 and ~8.6 % fire frames this yields ~48 % fire in each epoch.
+    CRITICAL FIX: We ONLY care about frames where the fire actually expanded (Delta > 0).
+    Due to 24-hour persistence, 23/24 frames have 0 spread.
+    Frames with active expansion get a massive weight (fire_oversample_ratio).
+    Frames with static fire get 0.0 weight (ignored).
+    Frames with no fire get a very small weight to keep the network grounded.
     """
     fire_data = ds_loaded["MODIS_FIRE_T1"].values
-    fire_per_frame = fire_data.sum(axis=(1, 2))
 
     weights = []
-    n_fire = 0
+    n_expansion = 0
+    n_static = 0
+    n_empty = 0
+
     for idx in indices:
-        target_idx = idx + 1
-        if target_idx < len(fire_per_frame) and fire_per_frame[target_idx] > 0:
+        current_fire = fire_data[idx]
+        next_fire = fire_data[idx + 1]
+
+        # Calculate new spread
+        delta = np.clip(next_fire - current_fire, 0, 1)
+        spread_pixels = delta.sum()
+
+        if spread_pixels > 0:
+            # Active expansion: Focus heavily on this!
             weights.append(fire_oversample_ratio)
-            n_fire += 1
+            n_expansion += 1
+        elif current_fire.sum() > 0:
+            # Fire exists, but didn't grow (static frame due to 24h persistence)
+            # IGNORE IT. If we train on this, the model learns to predict 0 spread.
+            weights.append(0.0)
+            n_static += 1
         else:
+            # No fire anywhere. Keep a few to prevent false positives.
             weights.append(1.0)
+            n_empty += 1
 
     print(
-        f"--- Weighted sampling: {n_fire}/{len(indices)} fire-target frames "
-        f"({100 * n_fire / max(len(indices), 1):.1f}%), "
-        f"oversample_ratio={fire_oversample_ratio} ---"
+        f"--- Sampler Weights: {n_expansion} Expansion (Focused), "
+        f"{n_static} Static (Ignored), {n_empty} Empty (Baseline) ---"
     )
     return torch.DoubleTensor(weights)
 

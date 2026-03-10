@@ -107,6 +107,7 @@ def train(model_type="unet"):
         # Validation Loop
         model.eval()
         val_f1_accum = 0.0
+        val_acc_accum = 0.0
         val_loss = 0.0
         val_batches = 0
 
@@ -125,16 +126,20 @@ def train(model_type="unet"):
 
                 metrics = compute_best_threshold_metrics(logits, labels)
                 val_f1_accum += metrics["f1"]
+                val_acc_accum += metrics["accuracy"]
                 val_batches += 1
 
         avg_val_loss = val_loss / max(1, val_batches)
         avg_val_f1 = val_f1_accum / max(1, val_batches)
+        avg_val_acc = val_acc_accum / max(1, val_batches)
 
         scheduler.step()
 
         print(f"\nEpoch {epoch + 1} Summary:")
         print(f"  Train Loss: {train_loss / len(train_loader):.4f}")
-        print(f"  Val Loss:   {avg_val_loss:.4f} | Val F1 (Best Thr): {avg_val_f1:.6f}")
+        print(
+            f"  Val Loss:   {avg_val_loss:.4f} | Val Acc: {avg_val_acc:.6f} | Val F1 (Best Thr): {avg_val_f1:.6f}"
+        )
 
         if avg_val_f1 > best_val_f1:
             best_val_f1 = avg_val_f1
