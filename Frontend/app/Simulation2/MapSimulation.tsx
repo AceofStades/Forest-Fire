@@ -48,6 +48,47 @@ function MapClickHandler({
     return null;
 }
 
+const WindOverlay = ({
+    speed,
+    direction,
+    isSandbox,
+}: {
+    speed: number;
+    direction: number;
+    isSandbox: boolean;
+}) => {
+    if (!isSandbox || speed === 0) return null;
+
+    // Slower, more gentle movement
+    const duration = Math.max(1.5, 8 - speed / 15);
+
+    return (
+        <div className="absolute inset-0 pointer-events-none z-[400] overflow-hidden opacity-20 flex items-center justify-center mix-blend-screen">
+            <div
+                className="w-[200%] h-[200%] absolute"
+                style={{ transform: `rotate(${direction}deg)` }}
+            >
+                <div
+                    className="w-full h-full"
+                    style={{
+                        // Wider spacing, curved paths for wave effect
+                        backgroundImage: `url("data:image/svg+xml,%3Csvg width='200' height='300' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M 100 300 Q 120 250, 100 200 T 100 100 M 40 150 Q 60 100, 40 50' stroke='rgba(255,255,255,0.4)' stroke-width='1.5' fill='none' stroke-linecap='round' /%3E%3C/svg%3E")`,
+                        backgroundSize: "200px 300px",
+                        animation: `windWave ${duration}s ease-in-out infinite`,
+                    }}
+                />
+            </div>
+            <style>{`
+                @keyframes windWave {
+                    0% { background-position: 0 300px; opacity: 0.3; }
+                    50% { opacity: 0.8; transform: translateX(10px); }
+                    100% { background-position: 0 0; opacity: 0.3; }
+                }
+            `}</style>
+        </div>
+    );
+};
+
 export default function MapSimulation() {
     const [events, setEvents] = useState<any[]>([]);
     const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
@@ -484,6 +525,13 @@ export default function MapSimulation() {
                         {/* Invisible layer to capture clicks */}
                         <MapClickHandler onMapClick={handleMapClick} />
                     </MapContainer>
+
+                    {/* Wind particles overlay placed AFTER MapContainer to be on top */}
+                    <WindOverlay
+                        speed={windSpeed}
+                        direction={windDir}
+                        isSandbox={isSandbox}
+                    />
                 </div>
             </div>
         </div>
