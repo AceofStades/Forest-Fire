@@ -27,9 +27,10 @@ The system consists of a robust **FastAPI** backend that serves predictions from
 ## Key Features
 
 *   **Deep Learning Predictions:** Utilizes a U-Net architecture to predict fire spread probability based on environmental factors (temperature, humidity, wind, rain).
-*   **Safe Path Planning:** Implements the D* Lite algorithm to calculate dynamic safe paths for rescue teams or evacuation.
-*   **Interactive Dashboard:** Real-time analytics, user-friendly controls, and comprehensive data reporting.
-*   **Simulation Sandbox:** Test different scenarios and visualize potential fire outcomes in a controlled environment.
+*   **Geospatial Simulation Engine:** An interactive `react-leaflet` mapping interface allowing users to view dynamic Cellular Automata spreading atop real-world geographic bounds (Uttarakhand).
+*   **Safe Path Planning:** Implements the D* Lite algorithm to calculate dynamic safe paths for rescue teams or evacuation based on real-time AI probabilities.
+*   **Historical Validation:** Side-by-side temporal playbacks comparing the model's predicted 48-hour fire spread against actual historical MODIS satellite sequences.
+*   **Data Upload Portal:** An interface for government or organizations to upload raw `.nc`, `.tiff`, or `.geojson` disaster snapshots for instant AI inference and routing.
 *   **AI Assistant:** Integrated chat interface for querying system data and insights.
 
 ## Architecture

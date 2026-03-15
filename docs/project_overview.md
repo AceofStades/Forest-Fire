@@ -74,10 +74,15 @@ Wildfires are a severe class imbalance problem. Over 95% of the map is just empt
 The machine learning models are not isolated; they are integrated into a robust real-world backend.
 
 ### 6.1 FastAPI Server and Lifespan State
-The backend `Server/app/main.py` uses FastAPI. To ensure fast inference, the trained PyTorch model weights and global dataset statistics (`stats_cache.pkl`) are loaded into RAM once during the application's startup lifecycle using FastAPI's `@asynccontextmanager lifespan` hook.
+The backend `Server/app/main.py` uses FastAPI. To ensure fast inference, the trained PyTorch model weights and global dataset statistics (`stats_cache_fi.pkl`) are loaded into RAM once during the application's startup lifecycle using FastAPI's `@asynccontextmanager lifespan` hook. The server actively maps inference variables against the `DYNAMIC_interpolated.nc` NetCDF file to serve localized predictions based on specific lat/lon boundaries.
 
 ### 6.2 D* Lite Dynamic Pathfinding (`d_star_lite.py`)
 To make the predictions actionable, we integrated the **D* Lite** algorithm. When the ML model generates a probability matrix of a fire spreading, this matrix is fed directly into the D* Lite environment. 
 - D* Lite searches backward from the user's Goal to their Start position.
 - The cost function heavily penalizes nodes with high fire probability.
 - Because D* Lite is dynamic, if the UNet model predicts a sudden wind shift that blocks the path in real-time, D* Lite can quickly recompute a new, safe evacuation route without having to recalculate the entire map from scratch.
+
+### 6.3 Interactive React-Leaflet Simulation Sandbox
+The frontend (Next.js 15) utilizes `react-leaflet` and HTML5 Canvas layers to dynamically overlay the 320x400 output matrices from the PyTorch backend onto a real-world map of Uttarakhand (`Lat: 28.718 to 31.491`, `Lon: 77.509 to 81.082`). 
+- **Historical Analysis:** Users can select historical events from April/May 2016. The backend pulls the actual `MODIS_FIRE_T1` tensor sequence to show a side-by-side animated CA playback of the *Predicted Spread* vs the *Actual Ground Truth Spread* over a 48-hour period.
+- **Sandbox Mode:** Government officials can click dynamically on the map to ignite virtual fires, adjusting real-time wind speeds and vectors on the UI. The Cellular Automata leverages the UNet's probability logic and immediately biases the spread to reflect wind constraints over the real topography.
