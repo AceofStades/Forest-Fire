@@ -47,18 +47,11 @@ def load_model(model_path: str | None = None) -> Any:
     return model
 
 
-def run_inference(model) -> np.ndarray:
-    """
-    Runs inference on a sample frame from the dataset to produce a prob grid.
-    Returns a 320x400 (or similar) probability numpy array.
-    """
+def get_event_data(model, idx: int, hours: int = 48) -> dict:
     if model is None:
         raise ValueError("Model is None")
 
     device = next(model.parameters()).device
-
-    # Load dataset
-    # We will pick a specific index that has fire
     nc_path = os.path.abspath(
         os.path.join(
             os.path.dirname(__file__),
@@ -66,9 +59,12 @@ def run_inference(model) -> np.ndarray:
         )
     )
     if not os.path.exists(nc_path):
-        # Fallback to local sample if dataset is missing
-        print(f"Dataset not found at {nc_path}, returning random data")
-        return np.random.rand(320, 400).astype(np.float32)
+        # Fallback to empty if dataset missing
+        return {
+            "probGrid": np.zeros((320, 400)).tolist(),
+            "groundTruth": [],
+            "initialFire": [],
+        }
 
     cache_path = os.path.abspath(
         os.path.join(
@@ -79,11 +75,8 @@ def run_inference(model) -> np.ndarray:
     ds_loaded, feature_vars, total_steps = _load_ds(nc_path, include_fire_input=True)
     stats = _compute_global_stats(ds_loaded, feature_vars, cache_path)
 
-    # Pick an index with active fire (just an arbitrary one late in the dataset, or search for it)
-    idx = 100  # arbitrary sample index
-
+    # 1. Base Prediction
     X_data = ds_loaded[feature_vars].isel(valid_time=idx).to_array(dim="channel").values
-
     min_v = stats["min"][:, None, None]
     max_v = stats["max"][:, None, None]
 
@@ -91,8 +84,7 @@ def run_inference(model) -> np.ndarray:
     denominator = max_v - min_v + np.float32(1e-6)
     X_norm = (X_data - min_v) / denominator
 
-    X_tensor = torch.from_numpy(X_norm).float().unsqueeze(0)  # (1, C, H, W)
-
+    X_tensor = torch.from_numpy(X_norm).float().unsqueeze(0)
     _, _, h, w = X_tensor.shape
     pad_h = (16 - h % 16) % 16
     pad_w = (16 - w % 16) % 16
@@ -107,9 +99,33 @@ def run_inference(model) -> np.ndarray:
             probs = torch.sigmoid(logits)
 
     probs = probs.squeeze().cpu().numpy()
-
-    # Remove padding if it was added
     if pad_h > 0 or pad_w > 0:
         probs = probs[:h, :w]
 
-    return probs
+    # 2. Extract Ground Truth Sequence (Sparse)
+    ground_truth = []
+    end_idx = min(idx + hours, total_steps)
+    fire_sequence = (
+        ds_loaded["MODIS_FIRE_T1"].isel(valid_time=slice(idx, end_idx)).values
+    )
+
+    for t in range(fire_sequence.shape[0]):
+        rows, cols = np.where(fire_sequence[t] > 0)
+        frame_coords = [[int(r), int(c)] for r, c in zip(rows, cols)]
+        ground_truth.append(frame_coords)
+
+    # Convert initial fire
+    init_fire = ds_loaded["MODIS_FIRE_T1"].isel(valid_time=idx).values
+    init_rows, init_cols = np.where(init_fire > 0)
+    initial_fire = [[int(r), int(c)] for r, c in zip(init_rows, init_cols)]
+
+    return {
+        "probGrid": probs.tolist(),
+        "groundTruth": ground_truth,
+        "initialFire": initial_fire,
+    }
+
+
+def run_inference(model) -> np.ndarray:
+    """Legacy function to maintain compatibility for /fire-grid endpoint"""
+    return np.array(get_event_data(model, idx=271, hours=1)["probGrid"])
