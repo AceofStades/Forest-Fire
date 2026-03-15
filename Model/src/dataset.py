@@ -14,6 +14,125 @@ INPUT_NC_PATH = "dataset/final_feature_stack_DYNAMIC_interpolated.nc"
 CACHE_PATH = "stats_cache.pkl"
 
 
+def _resolve_path(nc_path):
+    """Try to find the dataset file."""
+    if os.path.exists(nc_path):
+        return nc_path
+    alt = os.path.join("Model", nc_path)
+    if os.path.exists(alt):
+        return alt
+    return nc_path  # let it fail with a clear path
+
+
+def _load_ds(nc_path=None, include_fire_input=False):
+    """Load dataset into RAM. Returns (ds_loaded, feature_vars, total_steps).
+    If include_fire_input=True, MODIS_FIRE_T1 at time T is included as a feature.
+    Also dynamically calculates a Burn_Scar feature which is 1 if the pixel has ever been on fire.
+    Engineers Water_Mask from LULC and calculates Slope from DEM."""
+    path = _resolve_path(nc_path or INPUT_NC_PATH)
+    print(f"--- Loading dataset into RAM ({path}) ---")
+    with xr.open_dataset(path, engine="h5netcdf", chunks=None) as ds:
+        ds_loaded = ds.load()
+
+        # Calculate Burn_Scar
+        print("--- Calculating Burn_Scar (cumulative fire history) ---")
+        burn_scar = ds_loaded["MODIS_FIRE_T1"].cumsum(dim="valid_time")
+        burn_scar = xr.where(burn_scar > 0, 1.0, 0.0).astype(np.float32)
+        ds_loaded["Burn_Scar"] = burn_scar
+
+        # Engineer Water Mask from LULC (Assuming class 0 or specific class is water)
+        # Bhuvan LULC: typically Water bodies are a specific class.
+        # For generalization, if LULC <= 0 (or specific value), it's non-burnable.
+        # Let's assume class 0 is water/null.
+        print("--- Engineering Water_Mask from LULC ---")
+        lulc_data = ds_loaded["LULC"].values
+        # 1.0 means burnable, 0.0 means water/barren
+        water_mask = (lulc_data > 0).astype(np.float32)
+        ds_loaded["Water_Mask"] = (("latitude", "longitude"), water_mask)
+
+        # Engineer Urban Mask from GHS_BUILT
+        print("--- Engineering Urban_Mask from GHS_BUILT ---")
+        ghs_data = ds_loaded["GHS_BUILT"].values
+        urban_mask = (ghs_data > 0).astype(np.float32)
+        ds_loaded["Urban_Mask"] = (("latitude", "longitude"), urban_mask)
+
+        # Calculate Slope from DEM
+        print("--- Calculating Topographical Slope from DEM ---")
+        dem_data = ds_loaded["DEM"].values
+        # Compute spatial gradient (dy, dx)
+        slope_y, slope_x = np.gradient(dem_data)
+        ds_loaded["Slope_Y"] = (("latitude", "longitude"), slope_y.astype(np.float32))
+        ds_loaded["Slope_X"] = (("latitude", "longitude"), slope_x.astype(np.float32))
+
+        # We will drop the raw LULC, GHS, and DEM to avoid feeding raw unscaled categorical/absolute data
+        vars_to_drop = ["LULC", "GHS_BUILT", "DEM"]
+        ds_loaded = ds_loaded.drop_vars([v for v in vars_to_drop if v in ds_loaded])
+
+        if include_fire_input:
+            feature_vars = list(ds_loaded.data_vars)
+        else:
+            feature_vars = [v for v in ds_loaded.data_vars if v != "MODIS_FIRE_T1"]
+
+        total_steps = ds_loaded.sizes["valid_time"]
+
+    fire_frames = int((ds_loaded["MODIS_FIRE_T1"].values.sum(axis=(1, 2)) > 0).sum())
+    print(
+        f"--- Loaded: {total_steps} steps, {len(feature_vars)} features, "
+        f"{fire_frames} fire frames ({100 * fire_frames / total_steps:.1f}%) ---"
+    )
+    if include_fire_input:
+        print("--- MODIS_FIRE_T1 included as input feature (autoregressive mode) ---")
+    return ds_loaded, feature_vars, total_steps
+
+
+def _compute_global_stats(ds_loaded, feature_vars, cache_path):
+    if os.path.exists(cache_path):
+        print(f"--- Loading cached stats from {cache_path} ---")
+        try:
+            with open(cache_path, "rb") as f:
+                stats = pickle.load(f)
+            if isinstance(stats, dict) and "min" in stats and "max" in stats:
+                if len(stats["min"]) == len(feature_vars):
+                    return stats
+                print("Cache channel count mismatch. Recomputing...")
+        except Exception as e:
+            print(f"Warning: cache load failed ({e}). Recomputing...")
+
+    print("--- Computing Robust Stats (2nd/98th Percentiles) ---")
+    num_channels = len(feature_vars)
+    mins = np.zeros(num_channels)
+    maxs = np.zeros(num_channels)
+    means = np.zeros(num_channels)
+    stds = np.zeros(num_channels)
+
+    for i, var in enumerate(tqdm(feature_vars, desc="Analyzing Channels")):
+        data = ds_loaded[var].values
+
+        # Calculate mean and std for standard scaling
+        means[i] = np.nanmean(data)
+        stds[i] = np.nanstd(data) + 1e-6
+
+        if var in ["MODIS_FIRE_T1", "Burn_Scar", "Water_Mask", "Urban_Mask"]:
+            # These are binary/sparse, 98th percentile is often 0. Bypass scaling.
+            mins[i] = 0.0
+            maxs[i] = 1.0
+        else:
+            mins[i] = np.nanpercentile(data, 2)
+            maxs[i] = np.nanpercentile(data, 98)
+            if maxs[i] == mins[i]:
+                maxs[i] = np.nanmax(data)
+
+    stats = {
+        "min": mins.astype(np.float32),
+        "max": maxs.astype(np.float32),
+        "mean": means.astype(np.float32),
+        "std": stds.astype(np.float32),
+    }
+    with open(cache_path, "wb") as f:
+        pickle.dump(stats, f)
+    return stats
+
+
 class FireDataset(Dataset):
     """Single-frame dataset for UNet / AttentionUNet."""
 
@@ -22,6 +141,17 @@ class FireDataset(Dataset):
         self.indices = indices
         self.stats = stats
         self.feature_vars = feature_vars
+
+        # Find indices for specific channels to apply custom scaling
+        self.u10_idx = feature_vars.index("u10") if "u10" in feature_vars else -1
+        self.v10_idx = feature_vars.index("v10") if "v10" in feature_vars else -1
+
+        # Binary layers skip min-max scaling completely
+        self.binary_indices = [
+            i
+            for i, v in enumerate(feature_vars)
+            if v in ["MODIS_FIRE_T1", "Burn_Scar", "Water_Mask", "Urban_Mask"]
+        ]
 
     def __len__(self):
         return len(self.indices)
@@ -37,18 +167,30 @@ class FireDataset(Dataset):
         )
 
         # TARGET: We want to predict ONLY the newly ignited pixels (the Delta).
-        # This prevents the model from acting as an identity function.
         current_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=t_idx).values
         next_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=t_idx + 1).values
         Y_data = np.clip(next_fire - current_fire, 0, 1)
 
-        # Robust Normalization with Clipping
+        # Normalization
         min_v = self.stats["min"][:, None, None]
         max_v = self.stats["max"][:, None, None]
+        mean_v = self.stats["mean"][:, None, None]
+        std_v = self.stats["std"][:, None, None]
 
-        X_data = np.clip(X_data, min_v, max_v)
-        denominator = max_v - min_v + np.float32(1e-6)
-        X_norm = (X_data - min_v) / denominator
+        X_norm = np.zeros_like(X_data)
+
+        for c in range(X_data.shape[0]):
+            if c in self.binary_indices:
+                # Bypass scaling for binary masks
+                X_norm[c] = np.clip(X_data[c], 0, 1)
+            elif c == self.u10_idx or c == self.v10_idx:
+                # Standard Scaling for Wind Vectors to preserve directional signs (-/+)
+                X_norm[c] = (X_data[c] - mean_v[c]) / std_v[c]
+            else:
+                # Min-Max Scaling for everything else (Temperature, Slope, etc.)
+                data_c = np.clip(X_data[c], min_v[c], max_v[c])
+                denom = max_v[c] - min_v[c] + np.float32(1e-6)
+                X_norm[c] = (data_c - min_v[c]) / denom
 
         X_tensor = torch.from_numpy(X_norm).float()
         Y_tensor = torch.from_numpy(Y_data).float().unsqueeze(0)
@@ -74,6 +216,14 @@ class FireSeqDataset(Dataset):
         self.feature_vars = feature_vars
         self.seq_len = seq_len
 
+        self.u10_idx = feature_vars.index("u10") if "u10" in feature_vars else -1
+        self.v10_idx = feature_vars.index("v10") if "v10" in feature_vars else -1
+        self.binary_indices = [
+            i
+            for i, v in enumerate(feature_vars)
+            if v in ["MODIS_FIRE_T1", "Burn_Scar", "Water_Mask", "Urban_Mask"]
+        ]
+
     def __len__(self):
         return len(self.indices)
 
@@ -84,7 +234,8 @@ class FireSeqDataset(Dataset):
 
         min_v = self.stats["min"][:, None, None]
         max_v = self.stats["max"][:, None, None]
-        denom = max_v - min_v + np.float32(1e-6)
+        mean_v = self.stats["mean"][:, None, None]
+        std_v = self.stats["std"][:, None, None]
 
         frames = []
         for t in time_indices:
@@ -94,8 +245,19 @@ class FireSeqDataset(Dataset):
                 .to_array(dim="channel")
                 .values
             )
-            data = np.clip(data, min_v, max_v)
-            frames.append((data - min_v) / denom)
+
+            norm_frame = np.zeros_like(data)
+            for c in range(data.shape[0]):
+                if c in self.binary_indices:
+                    norm_frame[c] = np.clip(data[c], 0, 1)
+                elif c == self.u10_idx or c == self.v10_idx:
+                    norm_frame[c] = (data[c] - mean_v[c]) / std_v[c]
+                else:
+                    data_c = np.clip(data[c], min_v[c], max_v[c])
+                    denom = max_v[c] - min_v[c] + np.float32(1e-6)
+                    norm_frame[c] = (data_c - min_v[c]) / denom
+
+            frames.append(norm_frame)
 
         X_seq = np.stack(frames, axis=0)  # (T, C, H, W)
 
@@ -115,85 +277,6 @@ class FireSeqDataset(Dataset):
             Y_tensor = F.pad(Y_tensor, (0, pad_w, 0, pad_h))
 
         return X_tensor, Y_tensor
-
-
-# ---- Shared helpers ----
-
-
-def _resolve_path(nc_path):
-    """Try to find the dataset file."""
-    if os.path.exists(nc_path):
-        return nc_path
-    alt = os.path.join("Model", nc_path)
-    if os.path.exists(alt):
-        return alt
-    return nc_path  # let it fail with a clear path
-
-
-def _compute_global_stats(ds_loaded, feature_vars, cache_path):
-    if os.path.exists(cache_path):
-        print(f"--- Loading cached stats from {cache_path} ---")
-        try:
-            with open(cache_path, "rb") as f:
-                stats = pickle.load(f)
-            if isinstance(stats, dict) and "min" in stats and "max" in stats:
-                if len(stats["min"]) == len(feature_vars):
-                    return stats
-                print("Cache channel count mismatch. Recomputing...")
-        except Exception as e:
-            print(f"Warning: cache load failed ({e}). Recomputing...")
-
-    print("--- Computing Robust Stats (2nd/98th Percentiles) ---")
-    num_channels = len(feature_vars)
-    mins = np.zeros(num_channels)
-    maxs = np.zeros(num_channels)
-
-    for i, var in enumerate(tqdm(feature_vars, desc="Analyzing Channels")):
-        data = ds_loaded[var].values
-        if var in ["MODIS_FIRE_T1", "Burn_Scar"]:
-            # These are binary/sparse, 98th percentile is often 0
-            mins[i] = 0.0
-            maxs[i] = 1.0
-        else:
-            mins[i] = np.nanpercentile(data, 2)
-            maxs[i] = np.nanpercentile(data, 98)
-            if maxs[i] == mins[i]:
-                maxs[i] = np.nanmax(data)
-
-    stats = {"min": mins.astype(np.float32), "max": maxs.astype(np.float32)}
-    with open(cache_path, "wb") as f:
-        pickle.dump(stats, f)
-    return stats
-
-
-def _load_ds(nc_path=None, include_fire_input=False):
-    """Load dataset into RAM. Returns (ds_loaded, feature_vars, total_steps).
-    If include_fire_input=True, MODIS_FIRE_T1 at time T is included as a feature.
-    Also dynamically calculates a Burn_Scar feature which is 1 if the pixel has ever been on fire."""
-    path = _resolve_path(nc_path or INPUT_NC_PATH)
-    print(f"--- Loading dataset into RAM ({path}) ---")
-    with xr.open_dataset(path, engine="h5netcdf", chunks=None) as ds:
-        ds_loaded = ds.load()
-
-        # Calculate Burn_Scar
-        print("--- Calculating Burn_Scar (cumulative fire history) ---")
-        burn_scar = ds_loaded["MODIS_FIRE_T1"].cumsum(dim="valid_time")
-        burn_scar = xr.where(burn_scar > 0, 1.0, 0.0).astype(np.float32)
-        ds_loaded["Burn_Scar"] = burn_scar
-
-        if include_fire_input:
-            feature_vars = list(ds_loaded.data_vars)
-        else:
-            feature_vars = [v for v in ds_loaded.data_vars if v != "MODIS_FIRE_T1"]
-        total_steps = ds_loaded.sizes["valid_time"]
-    fire_frames = int((ds_loaded["MODIS_FIRE_T1"].values.sum(axis=(1, 2)) > 0).sum())
-    print(
-        f"--- Loaded: {total_steps} steps, {len(feature_vars)} features, "
-        f"{fire_frames} fire frames ({100 * fire_frames / total_steps:.1f}%) ---"
-    )
-    if include_fire_input:
-        print("--- MODIS_FIRE_T1 included as input feature (autoregressive mode) ---")
-    return ds_loaded, feature_vars, total_steps
 
 
 def _compute_sample_weights(ds_loaded, indices, fire_oversample_ratio=10.0):

@@ -91,6 +91,12 @@ class UNet(nn.Module):
         self.up4 = Up(128, 64)
         self.outc = nn.Conv2d(64, n_classes, kernel_size=1)
 
+        # Initialize bias to a strong negative value (e.g. -4.59)
+        # so that sigmoid(-4.59) ~ 0.01 (1% probability).
+        # Since fire is <0.1% of the dataset, this prevents the model
+        # from initially predicting 0.5 (50% fire) and getting a massive loss penalty.
+        nn.init.constant_(self.outc.bias, -5.0)
+
     def forward(self, x):
         x1 = self.inc(x)
         x2 = self.down1(x1)

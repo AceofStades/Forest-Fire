@@ -32,7 +32,7 @@ def train(model_type="unet"):
         train_loader, val_loader, in_channels = load_split_data(
             batch_size=BATCH_SIZE,
             weighted_sampling=True,
-            fire_oversample_ratio=50.0,
+            fire_oversample_ratio=5.0,
             include_fire_input=True,  # CRITICAL: UNet needs to see current fire!
         )
         model = UNet(n_channels=in_channels, n_classes=1)
