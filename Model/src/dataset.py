@@ -282,11 +282,10 @@ class FireSeqDataset(Dataset):
 def _compute_sample_weights(ds_loaded, indices, fire_oversample_ratio=10.0):
     """Per-sample weights for WeightedRandomSampler.
 
-    CRITICAL FIX: We ONLY care about frames where the fire actually expanded (Delta > 0).
-    Due to 24-hour persistence, 23/24 frames have 0 spread.
-    Frames with active expansion get a massive weight (fire_oversample_ratio).
-    Frames with static fire get 0.0 weight (ignored).
-    Frames with no fire get a very small weight to keep the network grounded.
+    Since we now use morphological interpolation, many frames have a tiny, slow expansion.
+    We need to sample frames where delta > 0 frequently.
+    Frames with static fire (which shouldn't exist as much anymore) get 0.1 weight.
+    Empty frames get a small weight to keep the network grounded.
     """
     fire_data = ds_loaded["MODIS_FIRE_T1"].values
 
@@ -304,22 +303,21 @@ def _compute_sample_weights(ds_loaded, indices, fire_oversample_ratio=10.0):
         spread_pixels = delta.sum()
 
         if spread_pixels > 0:
-            # Active expansion: Focus heavily on this!
+            # Active expansion
             weights.append(fire_oversample_ratio)
             n_expansion += 1
         elif current_fire.sum() > 0:
-            # Fire exists, but didn't grow (static frame due to 24h persistence)
-            # IGNORE IT. If we train on this, the model learns to predict 0 spread.
-            weights.append(0.0)
+            # Fire exists, but didn't grow
+            weights.append(0.5)
             n_static += 1
         else:
-            # No fire anywhere. Keep a few to prevent false positives.
+            # No fire anywhere.
             weights.append(1.0)
             n_empty += 1
 
     print(
         f"--- Sampler Weights: {n_expansion} Expansion (Focused), "
-        f"{n_static} Static (Ignored), {n_empty} Empty (Baseline) ---"
+        f"{n_static} Static (Weighted low), {n_empty} Empty (Baseline) ---"
     )
     return torch.DoubleTensor(weights)
 

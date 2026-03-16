@@ -106,10 +106,14 @@ def train(model_type="unet"):
 
         # Validation Loop
         model.eval()
-        val_f1_accum = 0.0
-        val_acc_accum = 0.0
         val_loss = 0.0
         val_batches = 0
+
+        thresholds = [0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5]
+        tp_counts = {t: 0 for t in thresholds}
+        fp_counts = {t: 0 for t in thresholds}
+        fn_counts = {t: 0 for t in thresholds}
+        tn_counts = {t: 0 for t in thresholds}
 
         print(f"Evaluating {model_type}...")
         with torch.no_grad():
@@ -124,14 +128,40 @@ def train(model_type="unet"):
                     v_loss = criterion(logits, labels)
                     val_loss += v_loss.item()
 
-                metrics = compute_best_threshold_metrics(logits, labels)
-                val_f1_accum += metrics["f1"]
-                val_acc_accum += metrics["accuracy"]
+                probs = torch.sigmoid(logits).detach()
+
+                for t in thresholds:
+                    pred_bin = (probs > t).float()
+                    tp_counts[t] += (pred_bin * labels).sum().item()
+                    fp_counts[t] += (pred_bin * (1 - labels)).sum().item()
+                    fn_counts[t] += ((1 - pred_bin) * labels).sum().item()
+                    tn_counts[t] += ((1 - pred_bin) * (1 - labels)).sum().item()
+
                 val_batches += 1
 
         avg_val_loss = val_loss / max(1, val_batches)
-        avg_val_f1 = val_f1_accum / max(1, val_batches)
-        avg_val_acc = val_acc_accum / max(1, val_batches)
+
+        best_f1 = -1.0
+        best_acc = 0.0
+        for t in thresholds:
+            tp = tp_counts[t]
+            fp = fp_counts[t]
+            fn = fn_counts[t]
+            tn = tn_counts[t]
+
+            if tp + fp + fn == 0:
+                f1 = 1.0
+            else:
+                f1 = 2 * tp / (2 * tp + fp + fn + 1e-8)
+
+            acc = (tp + tn) / (tp + tn + fp + fn + 1e-8)
+
+            if f1 > best_f1:
+                best_f1 = f1
+                best_acc = acc
+
+        avg_val_f1 = best_f1
+        avg_val_acc = best_acc
 
         scheduler.step()
 

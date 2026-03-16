@@ -2,13 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 # ============================================================================
 #  Loss functions
 # ============================================================================
 
+
 class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.8, gamma=2, reduction="mean"):
+    def __init__(self, alpha=0.99, gamma=2.0, reduction="mean"):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -17,7 +17,12 @@ class FocalLoss(nn.Module):
     def forward(self, inputs, targets):
         bce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
         pt = torch.exp(-bce_loss)
-        focal_loss = self.alpha * (1 - pt) ** self.gamma * bce_loss
+
+        # We must penalize missing the rare fire class MORE than false positives.
+        # Targets=1 gets alpha. Targets=0 gets (1-alpha).
+        alpha_t = targets * self.alpha + (1 - targets) * (1 - self.alpha)
+
+        focal_loss = alpha_t * (1 - pt) ** self.gamma * bce_loss
 
         if self.reduction == "mean":
             return focal_loss.mean()
@@ -44,14 +49,18 @@ class DiceLoss(nn.Module):
 class CombinedLoss(nn.Module):
     """alpha * FocalLoss + (1 - alpha) * DiceLoss"""
 
-    def __init__(self, alpha=0.5, focal_alpha=0.8, focal_gamma=2):
+    def __init__(self, alpha=0.2, focal_alpha=0.99, focal_gamma=2.0):
         super().__init__()
         self.alpha = alpha
         self.focal = FocalLoss(alpha=focal_alpha, gamma=focal_gamma)
         self.dice = DiceLoss()
 
     def forward(self, logits, targets):
-        return self.alpha * self.focal(logits, targets) + (1 - self.alpha) * self.dice(logits, targets)
+        # Fire is incredibly rare. Dice loss provides a much better structural gradient
+        # so we weight it heavily (80% Dice, 20% Focal).
+        return self.alpha * self.focal(logits, targets) + (1 - self.alpha) * self.dice(
+            logits, targets
+        )
 
 
 class BCEDiceLoss(nn.Module):
@@ -104,8 +113,9 @@ class BCETverskyLoss(nn.Module):
     alarms).
     """
 
-    def __init__(self, pos_weight=500.0, tversky_weight=0.5,
-                 tversky_alpha=0.3, tversky_beta=0.7):
+    def __init__(
+        self, pos_weight=500.0, tversky_weight=0.5, tversky_alpha=0.3, tversky_beta=0.7
+    ):
         super().__init__()
         self.bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]))
         self.tversky = TverskyLoss(alpha=tversky_alpha, beta=tversky_beta)
@@ -120,6 +130,7 @@ class BCETverskyLoss(nn.Module):
 # ============================================================================
 #  Metric helpers (kept for backward compatibility with evaluate.py)
 # ============================================================================
+
 
 def compute_metrics(pred_logits, target, threshold=0.3):
     """
@@ -165,10 +176,17 @@ def compute_all_metrics(logits, targets, threshold=0.5):
         fn = ((1 - pred_bin) * targets).sum().item()
         tn = ((1 - pred_bin) * (1 - targets)).sum().item()
 
-        precision = tp / (tp + fp + 1e-8)
-        recall = tp / (tp + fn + 1e-8)
-        f1 = 2 * precision * recall / (precision + recall + 1e-8)
-        iou = tp / (tp + fp + fn + 1e-8)
+        if tp + fp + fn == 0:
+            precision = 1.0
+            recall = 1.0
+            f1 = 1.0
+            iou = 1.0
+        else:
+            precision = tp / (tp + fp + 1e-8)
+            recall = tp / (tp + fn + 1e-8)
+            f1 = 2 * tp / (2 * tp + fp + fn + 1e-8)
+            iou = tp / (tp + fp + fn + 1e-8)
+
         accuracy = (tp + tn) / (tp + tn + fp + fn + 1e-8)
         max_prob = probs.max().item()
 
