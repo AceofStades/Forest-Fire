@@ -104,9 +104,14 @@ def get_event_data(model, idx: int, hours: int = 48) -> dict:
 
     # 2. Extract Ground Truth Sequence (Sparse)
     ground_truth = []
-    end_idx = min(idx + hours, total_steps)
+    # Since the frontend is now requesting "days", we need to multiply the requested days by 24
+    # to get the total hourly steps, and then step through the dataset every 24 hours.
+    total_requested_hours = hours * 24
+    end_idx = min(idx + total_requested_hours, total_steps)
+
+    # We slice the array but take a step of 24 to get exactly 1 frame per day
     fire_sequence = (
-        ds_loaded["MODIS_FIRE_T1"].isel(valid_time=slice(idx, end_idx)).values
+        ds_loaded["MODIS_FIRE_T1"].isel(valid_time=slice(idx, end_idx, 24)).values
     )
 
     for t in range(fire_sequence.shape[0]):

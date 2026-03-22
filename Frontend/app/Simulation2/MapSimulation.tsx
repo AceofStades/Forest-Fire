@@ -136,7 +136,7 @@ export default function MapSimulation() {
         setIsSandbox(false);
         try {
             const res = await fetch(
-                `http://127.0.0.1:8000/event-data/${id}?hours=48`,
+                `http://127.0.0.1:8000/event-data/${id}?hours=30`,
             );
             const data: EventData = await res.json();
             setEventData(data);
@@ -238,7 +238,7 @@ export default function MapSimulation() {
         if (isPlaying) {
             interval = setInterval(() => {
                 setEventData((currentData) => {
-                    if (!isSandbox && currentData && timeStep >= 48) {
+                    if (!isSandbox && currentData && timeStep >= 30) {
                         setIsPlaying(false);
                     } else if (currentData) {
                         runCAStep();
@@ -400,7 +400,7 @@ export default function MapSimulation() {
                                     Simulation Time:
                                 </span>
                                 <span className="font-mono text-orange-400 font-bold">
-                                    T + {timeStep} Hours
+                                    T + {timeStep} Days
                                 </span>
                             </div>
 
@@ -420,7 +420,7 @@ export default function MapSimulation() {
                                     onClick={runCAStep}
                                     disabled={isPlaying}
                                 >
-                                    Step +1h
+                                    Step +1 Day
                                 </Button>
                             </div>
 
