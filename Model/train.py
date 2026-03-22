@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 from src.dataset import load_seq_data, load_split_data
 from src.models import ConvLSTMFireNet, UNet
-from src.utils import CombinedLoss, compute_best_threshold_metrics
+from src.utils import CombinedLoss, compute_binary_metrics_from_counts
 from tqdm import tqdm
 
 # --- CONFIG ---
@@ -33,7 +33,7 @@ def train(model_type="unet"):
             batch_size=BATCH_SIZE,
             weighted_sampling=True,
             fire_oversample_ratio=5.0,
-            include_fire_input=True,  # CRITICAL: UNet needs to see current fire!
+            include_fire_input=False,  # CRITICAL: We want Burn Susceptibility, no cheating!
         )
         model = UNet(n_channels=in_channels, n_classes=1)
         model = model.to(device)
@@ -143,22 +143,23 @@ def train(model_type="unet"):
 
         best_f1 = -1.0
         best_acc = 0.0
+        best_threshold = 0.5
         for t in thresholds:
             tp = tp_counts[t]
             fp = fp_counts[t]
             fn = fn_counts[t]
             tn = tn_counts[t]
 
-            if tp + fp + fn == 0:
-                f1 = 1.0
-            else:
-                f1 = 2 * tp / (2 * tp + fp + fn + 1e-8)
-
-            acc = (tp + tn) / (tp + tn + fp + fn + 1e-8)
+            metrics = compute_binary_metrics_from_counts(
+                tp, fp, fn, tn, zero_division=0.0
+            )
+            f1 = metrics["f1"]
+            acc = metrics["accuracy"]
 
             if f1 > best_f1:
                 best_f1 = f1
                 best_acc = acc
+                best_threshold = t
 
         avg_val_f1 = best_f1
         avg_val_acc = best_acc
@@ -168,7 +169,8 @@ def train(model_type="unet"):
         print(f"\nEpoch {epoch + 1} Summary:")
         print(f"  Train Loss: {train_loss / len(train_loader):.4f}")
         print(
-            f"  Val Loss:   {avg_val_loss:.4f} | Val Acc: {avg_val_acc:.6f} | Val F1 (Best Thr): {avg_val_f1:.6f}"
+            f"  Val Loss:   {avg_val_loss:.4f} | Val Acc: {avg_val_acc:.6f} | "
+            f"Val F1 (Best Thr={best_threshold:.2f}): {avg_val_f1:.6f}"
         )
 
         if avg_val_f1 > best_val_f1:

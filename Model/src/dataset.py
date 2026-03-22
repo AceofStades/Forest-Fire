@@ -12,6 +12,7 @@ from tqdm import tqdm
 # --- CONFIGURATION ---
 INPUT_NC_PATH = "dataset/final_feature_stack_DYNAMIC_interpolated.nc"
 CACHE_PATH = "stats_cache.pkl"
+ERA5_FEATURE_VARS = ["d2m", "t2m", "swvl1", "e", "u10", "v10", "tp", "cvl"]
 
 
 def _resolve_path(nc_path):
@@ -76,10 +77,19 @@ def _load_ds(nc_path=None, include_fire_input=False):
         total_steps = ds_loaded.sizes["valid_time"]
 
     fire_frames = int((ds_loaded["MODIS_FIRE_T1"].values.sum(axis=(1, 2)) > 0).sum())
+    era5_present = [v for v in ERA5_FEATURE_VARS if v in feature_vars]
+    era5_missing = [v for v in ERA5_FEATURE_VARS if v not in feature_vars]
     print(
         f"--- Loaded: {total_steps} steps, {len(feature_vars)} features, "
         f"{fire_frames} fire frames ({100 * fire_frames / total_steps:.1f}%) ---"
     )
+    print(f"--- Input features: {', '.join(feature_vars)} ---")
+    print(
+        f"--- ERA5 channels used: {len(era5_present)}/{len(ERA5_FEATURE_VARS)} "
+        f"({', '.join(era5_present)}) ---"
+    )
+    if era5_missing:
+        print(f"--- Warning: Missing ERA5 channels: {', '.join(era5_missing)} ---")
     if include_fire_input:
         print("--- MODIS_FIRE_T1 included as input feature (autoregressive mode) ---")
     return ds_loaded, feature_vars, total_steps
@@ -166,10 +176,9 @@ class FireDataset(Dataset):
             .values
         )
 
-        # TARGET: We want to predict ONLY the newly ignited pixels (the Delta).
-        current_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=t_idx).values
+        # TARGET: Predict the entire fire state at T+1, not just the newly ignited pixels.
         next_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=t_idx + 1).values
-        Y_data = np.clip(next_fire - current_fire, 0, 1)
+        Y_data = np.clip(next_fire, 0, 1)
 
         # Normalization
         min_v = self.stats["min"][:, None, None]
@@ -261,10 +270,9 @@ class FireSeqDataset(Dataset):
 
         X_seq = np.stack(frames, axis=0)  # (T, C, H, W)
 
-        # TARGET: We want to predict ONLY the newly ignited pixels (the Delta).
-        current_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=target_t_idx).values
+        # TARGET: Predict the entire fire state at T+1, not just the newly ignited pixels.
         next_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=target_t_idx + 1).values
-        Y_data = np.clip(next_fire - current_fire, 0, 1)
+        Y_data = np.clip(next_fire, 0, 1)
 
         X_tensor = torch.from_numpy(X_seq).float()
         Y_tensor = torch.from_numpy(Y_data).float().unsqueeze(0)
@@ -322,6 +330,68 @@ def _compute_sample_weights(ds_loaded, indices, fire_oversample_ratio=10.0):
     return torch.DoubleTensor(weights)
 
 
+def _spread_positive_mask(fire_data, indices):
+    """Return bool mask for samples whose target delta fire map has any positive pixel."""
+    if len(indices) == 0:
+        return np.zeros(0, dtype=bool)
+    current_fire = fire_data[indices]
+    next_fire = fire_data[indices + 1]
+    delta = np.clip(next_fire - current_fire, 0, 1)
+    return delta.reshape(len(indices), -1).sum(axis=1) > 0
+
+
+def _split_indices_with_positive_guard(indices, fire_data, test_size=0.2):
+    """Chronological split first; fallback to stratified shuffle if val has no positives."""
+    train_idx, val_idx = train_test_split(indices, test_size=test_size, shuffle=False)
+
+    all_pos = _spread_positive_mask(fire_data, indices)
+    total_pos = int(all_pos.sum())
+    if total_pos == 0:
+        print(
+            "--- Warning: No positive spread targets in dataset. "
+            "Validation F1 will stay 0 by definition. ---"
+        )
+        return train_idx, val_idx
+
+    train_pos = int(_spread_positive_mask(fire_data, train_idx).sum())
+    val_pos = int(_spread_positive_mask(fire_data, val_idx).sum())
+    if val_pos > 0:
+        print(
+            f"--- Split positives (chronological): train={train_pos}, val={val_pos}, "
+            f"total={total_pos} ---"
+        )
+        return train_idx, val_idx
+
+    print(
+        "--- Warning: Chronological validation split has 0 positive spread samples. "
+        "Switching to stratified shuffled split for meaningful F1. ---"
+    )
+    labels = all_pos.astype(np.int64)
+    unique, counts = np.unique(labels, return_counts=True)
+    can_stratify = len(unique) == 2 and counts.min() >= 2
+
+    if can_stratify:
+        train_idx, val_idx = train_test_split(
+            indices,
+            test_size=test_size,
+            shuffle=True,
+            random_state=42,
+            stratify=labels,
+        )
+    else:
+        train_idx, val_idx = train_test_split(
+            indices, test_size=test_size, shuffle=True, random_state=42
+        )
+
+    train_pos = int(_spread_positive_mask(fire_data, train_idx).sum())
+    val_pos = int(_spread_positive_mask(fire_data, val_idx).sum())
+    print(
+        f"--- Split positives (fallback): train={train_pos}, val={val_pos}, "
+        f"total={total_pos} ---"
+    )
+    return train_idx, val_idx
+
+
 # ---- Public loaders ----
 
 
@@ -352,7 +422,8 @@ def load_split_data(
     stats = _compute_global_stats(ds_loaded, feature_vars, cache)
 
     indices = np.arange(total_steps - 1)
-    train_idx, val_idx = train_test_split(indices, test_size=0.2, shuffle=False)
+    fire_data = ds_loaded["MODIS_FIRE_T1"].values
+    train_idx, val_idx = _split_indices_with_positive_guard(indices, fire_data)
 
     train_ds = FireDataset(ds_loaded, train_idx, stats, feature_vars)
     val_ds = FireDataset(ds_loaded, val_idx, stats, feature_vars)
@@ -420,7 +491,8 @@ def load_seq_data(
     stats = _compute_global_stats(ds_loaded, feature_vars, cache)
 
     indices = np.arange(seq_len, total_steps - 1)
-    train_idx, val_idx = train_test_split(indices, test_size=0.2, shuffle=False)
+    fire_data = ds_loaded["MODIS_FIRE_T1"].values
+    train_idx, val_idx = _split_indices_with_positive_guard(indices, fire_data)
 
     train_ds = FireSeqDataset(ds_loaded, train_idx, stats, feature_vars, seq_len)
     val_ds = FireSeqDataset(ds_loaded, val_idx, stats, feature_vars, seq_len)

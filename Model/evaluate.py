@@ -12,7 +12,7 @@ sys.path.append(SCRIPT_DIR)
 
 import src.dataset
 from src.models import ConvLSTMFireNet, UNet
-from src.utils import compute_best_threshold_metrics
+from src.utils import compute_binary_metrics_from_counts
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -29,7 +29,7 @@ def evaluate_model(model_type):
 
     if model_type == "unet":
         _, val_loader, in_channels = src.dataset.load_split_data(
-            batch_size=16, include_fire_input=True
+            batch_size=16, include_fire_input=False
         )
         model = UNet(n_channels=in_channels, n_classes=1)
     elif model_type == "convlstm":
@@ -54,6 +54,7 @@ def evaluate_model(model_type):
     # We will test thresholds from 0.05 to 0.5 to find the best operating point
     thresholds = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5]
     metrics_per_thr = {t: {"tp": 0, "fp": 0, "fn": 0, "tn": 0} for t in thresholds}
+    target_positive_pixels = 0.0
 
     with torch.no_grad():
         for inputs, targets in tqdm(val_loader, desc="Evaluating Batches"):
@@ -70,6 +71,7 @@ def evaluate_model(model_type):
             # Move to CPU for metric calculation to avoid massive VRAM usage
             probs_np = probs.cpu().numpy()
             targets_np = targets.cpu().numpy()
+            target_positive_pixels += targets_np.sum()
 
             for t in thresholds:
                 pred = (probs_np > t).astype(np.float32)
@@ -79,6 +81,12 @@ def evaluate_model(model_type):
                 metrics_per_thr[t]["tn"] += ((1 - pred) * (1 - targets_np)).sum()
 
     print("\n--- RESULTS ---")
+    if target_positive_pixels == 0:
+        print(
+            "Warning: Validation targets contain 0 positive spread pixels. "
+            "F1/Recall are 0 by definition."
+        )
+
     best_f1 = -1.0
     best_stats = {}
 
@@ -88,11 +96,12 @@ def evaluate_model(model_type):
         fn = metrics_per_thr[t]["fn"]
         tn = metrics_per_thr[t]["tn"]
 
-        pr = tp / (tp + fp + 1e-8)
-        rc = tp / (tp + fn + 1e-8)
-        f1 = 2 * pr * rc / (pr + rc + 1e-8)
-        iou = tp / (tp + fp + fn + 1e-8)
-        acc = (tp + tn) / (tp + tn + fp + fn + 1e-8)
+        metrics = compute_binary_metrics_from_counts(tp, fp, fn, tn, zero_division=0.0)
+        pr = metrics["precision"]
+        rc = metrics["recall"]
+        f1 = metrics["f1"]
+        iou = metrics["iou"]
+        acc = metrics["accuracy"]
 
         if f1 > best_f1:
             best_f1 = f1

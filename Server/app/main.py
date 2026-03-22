@@ -44,15 +44,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Forest Fire Rescue API", lifespan=lifespan)
 
 # 2. CORS
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
-origins = [o.strip() for o in ALLOWED_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins or ["*"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

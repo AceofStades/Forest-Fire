@@ -72,7 +72,7 @@ def get_event_data(model, idx: int, hours: int = 48) -> dict:
             "../../Model/" + CACHE_PATH.replace(".pkl", "_fi.pkl"),
         )
     )
-    ds_loaded, feature_vars, total_steps = _load_ds(nc_path, include_fire_input=True)
+    ds_loaded, feature_vars, total_steps = _load_ds(nc_path, include_fire_input=False)
     stats = _compute_global_stats(ds_loaded, feature_vars, cache_path)
 
     # 1. Base Prediction

@@ -7,10 +7,56 @@ import torch.nn.functional as F
 # ============================================================================
 
 
+class ChannelAttention(nn.Module):
+    def __init__(self, in_planes, ratio=16):
+        super(ChannelAttention, self).__init__()
+        ratio = max(1, in_planes // ratio)
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Conv2d(in_planes, ratio, 1, bias=False),
+            nn.ReLU(),
+            nn.Conv2d(ratio, in_planes, 1, bias=False),
+        )
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = self.fc(self.avg_pool(x))
+        max_out = self.fc(self.max_pool(x))
+        out = avg_out + max_out
+        return self.sigmoid(out)
+
+
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=kernel_size // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x_cat = torch.cat([avg_out, max_out], dim=1)
+        x_out = self.conv1(x_cat)
+        return self.sigmoid(x_out)
+
+
+class CBAM(nn.Module):
+    def __init__(self, in_planes, ratio=16, kernel_size=7):
+        super(CBAM, self).__init__()
+        self.ca = ChannelAttention(in_planes, ratio)
+        self.sa = SpatialAttention(kernel_size)
+
+    def forward(self, x):
+        x = x * self.ca(x)
+        x = x * self.sa(x)
+        return x
+
+
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
 
-    def __init__(self, in_channels, out_channels, dropout=0.0):
+    def __init__(self, in_channels, out_channels, dropout=0.0, use_cbam=False):
         super().__init__()
         layers = [
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
@@ -24,8 +70,15 @@ class DoubleConv(nn.Module):
             layers.append(nn.Dropout2d(dropout))
         self.double_conv = nn.Sequential(*layers)
 
+        self.use_cbam = use_cbam
+        if self.use_cbam:
+            self.cbam = CBAM(out_channels)
+
     def forward(self, x):
-        return self.double_conv(x)
+        out = self.double_conv(x)
+        if self.use_cbam:
+            out = self.cbam(out)
+        return out
 
 
 class Down(nn.Module):
@@ -75,7 +128,9 @@ class UNet(nn.Module):
         self.n_channels = n_channels
         self.n_classes = n_classes
 
-        self.inc = DoubleConv(n_channels, 64)
+        # Use CBAM in the initial layers to allow the model to actively attend to
+        # specific physics channels (wind, temp, elevation) based on the spatial context.
+        self.inc = DoubleConv(n_channels, 64, use_cbam=True)
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
@@ -121,6 +176,8 @@ class ConvLSTMCell(nn.Module):
     def __init__(self, input_dim, hidden_dim, kernel_size=3):
         super().__init__()
         self.hidden_dim = hidden_dim
+        # Add CBAM to the combined input (physics features + hidden state)
+        self.cbam = CBAM(input_dim + hidden_dim)
         self.conv = nn.Conv2d(
             input_dim + hidden_dim,
             4 * hidden_dim,
@@ -132,6 +189,7 @@ class ConvLSTMCell(nn.Module):
     def forward(self, x, state):
         h, c = state
         combined = torch.cat([x, h], dim=1)
+        combined = self.cbam(combined)
         gates = self.conv(combined)
         i, f, o, g = torch.split(gates, self.hidden_dim, dim=1)
         i = torch.sigmoid(i)

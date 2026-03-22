@@ -7,6 +7,36 @@ import torch.nn.functional as F
 # ============================================================================
 
 
+def _safe_div(numerator, denominator, zero_division=0.0):
+    if denominator > 0:
+        return numerator / denominator
+    return float(zero_division)
+
+
+def compute_binary_metrics_from_counts(tp, fp, fn, tn, zero_division=0.0):
+    """Compute binary segmentation metrics from confusion-matrix counts."""
+    tp = float(tp)
+    fp = float(fp)
+    fn = float(fn)
+    tn = float(tn)
+
+    precision = _safe_div(tp, tp + fp, zero_division=zero_division)
+    recall = _safe_div(tp, tp + fn, zero_division=zero_division)
+    f1 = _safe_div(
+        2.0 * precision * recall, precision + recall, zero_division=zero_division
+    )
+    iou = _safe_div(tp, tp + fp + fn, zero_division=zero_division)
+    accuracy = _safe_div(tp + tn, tp + tn + fp + fn, zero_division=zero_division)
+
+    return {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "iou": iou,
+    }
+
+
 class FocalLoss(nn.Module):
     def __init__(self, alpha=0.99, gamma=2.0, reduction="mean"):
         super(FocalLoss, self).__init__()
@@ -176,26 +206,17 @@ def compute_all_metrics(logits, targets, threshold=0.5):
         fn = ((1 - pred_bin) * targets).sum().item()
         tn = ((1 - pred_bin) * (1 - targets)).sum().item()
 
-        if tp + fp + fn == 0:
-            precision = 1.0
-            recall = 1.0
-            f1 = 1.0
-            iou = 1.0
-        else:
-            precision = tp / (tp + fp + 1e-8)
-            recall = tp / (tp + fn + 1e-8)
-            f1 = 2 * tp / (2 * tp + fp + fn + 1e-8)
-            iou = tp / (tp + fp + fn + 1e-8)
-
-        accuracy = (tp + tn) / (tp + tn + fp + fn + 1e-8)
+        metrics = compute_binary_metrics_from_counts(
+            tp, fp, fn, tn, zero_division=0.0
+        )
         max_prob = probs.max().item()
 
     return {
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "iou": iou,
+        "accuracy": metrics["accuracy"],
+        "precision": metrics["precision"],
+        "recall": metrics["recall"],
+        "f1": metrics["f1"],
+        "iou": metrics["iou"],
         "max_prob": max_prob,
         "threshold": threshold,
     }
