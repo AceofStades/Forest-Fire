@@ -110,6 +110,7 @@ export default function MapSimulation() {
     const ROWS = 320;
     const COLS = 400;
     const stateGrid = useRef(new Uint8Array(ROWS * COLS));
+    const stateHistory = useRef<Uint8Array[]>([]);
     const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
     const DATASET_BOUNDS: [[number, number], [number, number]] = [
@@ -145,6 +146,7 @@ export default function MapSimulation() {
             data.initialFire.forEach(([r, c]) => {
                 stateGrid.current[r * COLS + c] = 1;
             });
+            stateHistory.current = [new Uint8Array(stateGrid.current)];
 
             renderCanvas(data);
         } catch (err) {
@@ -158,6 +160,7 @@ export default function MapSimulation() {
         setTimeStep(0);
         setEventData(null);
         stateGrid.current.fill(0);
+        stateHistory.current = [new Uint8Array(stateGrid.current)];
 
         fetch("http://127.0.0.1:8000/fire-grid")
             .then((res) => res.json())
@@ -177,7 +180,20 @@ export default function MapSimulation() {
     const handleMapClick = (r: number, c: number) => {
         if (!isSandbox || !eventData) return;
         stateGrid.current[r * COLS + c] = 1;
+        // If we click the map, we truncate future history
+        stateHistory.current = stateHistory.current.slice(0, timeStep + 1);
+        stateHistory.current[timeStep] = new Uint8Array(stateGrid.current);
         renderCanvas(eventData);
+    };
+
+    const handleScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newStep = parseInt(e.target.value, 10);
+        if (stateHistory.current[newStep]) {
+            setIsPlaying(false);
+            setTimeStep(newStep);
+            stateGrid.current = new Uint8Array(stateHistory.current[newStep]);
+            renderCanvas(eventData!, newStep);
+        }
     };
 
     const runCAStep = () => {
@@ -229,6 +245,11 @@ export default function MapSimulation() {
             }
         }
         stateGrid.current = nextState;
+
+        // Truncate any future history if we generated a new branch, then add new state
+        stateHistory.current = stateHistory.current.slice(0, timeStep + 1);
+        stateHistory.current.push(new Uint8Array(nextState));
+
         setTimeStep((prev) => prev + 1);
         renderCanvas(eventData, timeStep + 1);
     };
@@ -403,6 +424,19 @@ export default function MapSimulation() {
                                     T + {timeStep} Days
                                 </span>
                             </div>
+
+                            <input
+                                type="range"
+                                min="0"
+                                max={
+                                    stateHistory.current.length > 0
+                                        ? stateHistory.current.length - 1
+                                        : 0
+                                }
+                                value={timeStep}
+                                onChange={handleScrub}
+                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                            />
 
                             <div className="grid grid-cols-2 gap-2">
                                 <Button
