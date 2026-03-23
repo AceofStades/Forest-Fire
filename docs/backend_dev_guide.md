@@ -25,19 +25,19 @@ To ensure the API responds quickly without loading gigabytes of weights on every
 ### Required Artifacts in `Server/app/models/`
 Before running the server, ensure the following files (generated from the `Model/` training pipeline) are placed in the `Server/app/models/` directory:
 
-1.  **Model Weights:** The trained PyTorch model (`best_unet.pth`). *Note: We utilize the U-Net architecture trained via the Expansion-Only Delta approach.*
-2.  **Dataset Statistics:** The `stats_cache_fi.pkl` file. This contains the robust min/max values required to normalize incoming real-time weather/sensor data so it perfectly matches the scale the model was trained on.
+1.  **Model Weights:** The trained PyTorch model (`best_unet.pth`). *Note: We utilize the U-Net architecture trained as a Static Burn Susceptibility (Fuel) Model.*
+2.  **Dataset Statistics:** The `stats_cache.pkl` file. This contains the robust min/max values required to normalize incoming real-time weather/sensor data so it perfectly matches the scale the model was trained on.
 
 ## 3. The Cellular Automata Inference Pipeline
 
-The ML model does **not** predict the entire fire map. It is trained to predict **only the newly expanding edges (Delta)**. This allows the backend to act as the transition rule engine for the frontend's Cellular Automata (CA) simulation.
+The ML model does **not** predict the spread of the fire directly. To prevent "persistence bias", the model is trained to predict the inherent **Burn Susceptibility (Fuel Map)** of the environment based on static landscape and weather features. This allows the backend to provide the base transition probabilities for the frontend's Cellular Automata (CA) simulation.
 
-When the frontend sends a request to simulate the next hour, the backend follows this pipeline:
+When the frontend requests data for a simulation, the backend follows this pipeline:
 
 ### A. Input Payload (What to give the model)
-The endpoint must receive a payload containing the current state of the simulation. This is constructed into a 13-channel PyTorch tensor of shape `[1, 13, Height, Width]`.
+The endpoint constructs a 13-channel PyTorch tensor of shape `[1, 13, Height, Width]`. The model is *blind* to the current fire state.
 
-The 13 channels **must be strictly ordered** as follows (matching the `feature_vars` list):
+The 13 channels **must be strictly ordered** as follows:
 1.  `d2m`: 2m Dewpoint Temperature
 2.  `t2m`: 2m Temperature
 3.  `swvl1`: Volumetric Soil Water Layer 1
@@ -46,29 +46,23 @@ The 13 channels **must be strictly ordered** as follows (matching the `feature_v
 6.  `v10`: 10m V-component of Wind
 7.  `tp`: Total Precipitation
 8.  `cvl`: Low Vegetation Cover
-9.  **`MODIS_FIRE_T1`**: The current binary fire state (1 = fire, 0 = no fire).
-10. `DEM`: Digital Elevation Model (Topography)
-11. `LULC`: Land Use Land Cover
-12. `GHS_BUILT`: Global Human Settlement Layer
-13. **`Burn_Scar`**: A historical memory channel (1 = burned in the past, 0 = unburned).
+9.  `Burn_Scar`: A historical memory channel (1 = burned in the past, 0 = unburned).
+10. `Water_Mask`: Engineered from LULC (1 = burnable, 0 = water/barren).
+11. `Urban_Mask`: Engineered from GHS_BUILT (1 = urban).
+12. `Slope_Y`: Topographical Y gradient.
+13. `Slope_X`: Topographical X gradient.
 
 ### B. Normalization
-The incoming values (channels 1-8 and 10-12) are normalized using the loaded `ml_artifacts["stats"]`. 
-*   *Critical:* Channels 9 (`MODIS_FIRE_T1`) and 13 (`Burn_Scar`) are sparse binary channels and bypass percentile scaling. They must be hardcoded to `[0, 1]`.
+The incoming values are normalized using the loaded `ml_artifacts["stats"]`. 
+*   *Critical:* Binary channels bypass percentile scaling. They must be hardcoded to `[0, 1]`.
 
 ### C. Forward Pass & Output (What to expect)
 1.  The `[1, 13, H, W]` tensor is passed through the `UNet`.
 2.  The model outputs raw logits which are passed through `torch.sigmoid()` to yield a probability map `[1, 1, H, W]`.
-3.  **This output is the Spread Probability Map.** It highlights topographical hotspots where the fire is likely to expand in the next hour.
+3.  **This output is the Static Spread Probability (Fuel) Map.** It highlights topographical hotspots where the fire could potentially expand.
 
 ### D. The Simulation Step
-To generate the $T+1$ fire map to send back to the frontend, you apply the probability map to the current fire:
-```python
-# Simulated CA Step
-# If probability > threshold, new fire ignites. We clip to 1.0 to prevent values exploding.
-next_fire_grid = np.clip(current_fire_grid + spread_probability_map, 0, 1.0)
-```
-You then update the `Burn_Scar` channel (since the current fire has consumed fuel) and return the `next_fire_grid` to the frontend for 3D rendering.
+The simulated Cellular Automaton logic occurs primarily in the Next.js React frontend. The frontend uses the ML's probability map, factors in the user's interactive wind speed and direction sliders, and mathematically steps the fire forward **day-by-day**. New satellite ignitions are continuously injected into the simulation grid from the raw dataset to maintain real-world accuracy.
 
 ## 4. D* Lite Pathfinding Integration
 

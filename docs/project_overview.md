@@ -32,31 +32,32 @@ The system frames wildfire prediction as an image segmentation problem.
 
 ### 3.1 UNet (Spatial Prediction)
 The UNet is a fully convolutional network that analyzes a single time frame. 
-- **Input:** 13 channels (Weather, Elevation, LULC, GHS, Burn_Scar, and the *current* fire state `MODIS_FIRE_T1`).
-- **Optimization:** Early versions of the model suffered from "persistence memorization"—it simply copied the input fire state to the output. To combat this, we injected aggressive spatial `Dropout2d` layers (rates of 0.3 and 0.5) into the bottleneck and decoding pathways. This forces the network to rely on contextual weather and vegetation features to reconstruct the fire boundaries.
+- **Input:** 13 channels (Weather, Elevation, LULC, GHS, Burn_Scar). It is *blind* to the current fire state.
+- **Optimization:** Early versions of the model suffered from "persistence memorization"—it simply copied the input fire state to the output. To combat this, we removed the fire state from the input entirely. The model now acts as a pure **Static Burn Susceptibility (Fuel) Model**, forced to synthesize the weather and vegetation features to generate a topographical probability map. We also injected aggressive spatial `Dropout2d` layers (rates of 0.3 and 0.5) into the bottleneck.
 
 ### 3.2 ConvLSTMFireNet (Spatiotemporal Prediction)
 Fires are a function of both space and time. 
-- **Architecture:** The ConvLSTM ingests sequences of inputs (e.g., $T-3, T-2, T-1, T$) via stacked Convolutional LSTM cells. It maintains a hidden state matrix that captures momentum, allowing it to "understand" which direction the fire has been expanding due to wind.
-- **Optimization:** Spatiotemporal sequences demand massive VRAM. To resolve Out-of-Memory (OOM) GPU errors, we engineered the training loop to dynamically reduce the physical `batch_size` to 2 for ConvLSTM, while quadrupling the `ACCUMULATION_STEPS`. This preserves the stable gradient descent of a batch size of 32 without crashing the 16GB GPU.
+- **Architecture:** The ConvLSTM ingests sequences of inputs (e.g., $T-3, T-2, T-1, T$) via stacked Convolutional LSTM cells. It maintains a hidden state matrix that captures momentum.
+- **Optimization:** Spatiotemporal sequences demand massive VRAM. To resolve Out-of-Memory (OOM) GPU errors, we engineered the training loop to dynamically reduce the physical `batch_size` to 2 for ConvLSTM, while quadrupling the `ACCUMULATION_STEPS`. 
 
 ---
 
 ## 4. Addressing Critical Data Challenges
 
-Developing this system uncovered several severe challenges regarding geospatial machine learning.
+Developing this system uncovered several severe challenges regarding geospatial machine learning, ultimately leading to a Hybrid ML + Math architecture.
 
-### 4.1 The "Strobe Light" Effect and Temporal Interpolation
-**The Problem:** The initial dynamic dataset produced an F1 score of exactly `0.0`. Diagnostics revealed that the correlation between fire at time $T$ and $T+1$ was **0.00%**. Because MODIS is a satellite in low Earth orbit, it only takes snapshots a few times a day. In hourly data, a fire would appear at 10:00 AM, the map would be completely blank at 11:00 AM, and a fire would reappear at 4:00 PM. It was mathematically impossible for the model to predict where a fire would be.
-**The Solution:** We applied a **24-hour persistence interpolation**. If a fire was detected at time $T$, we forward-filled that fire pixel for the next 24 hours. This simulated a continuous, burning fire, raising the temporal correlation to a realistic **95.99%** and allowing the model to learn localized spatial spread.
+### 4.1 The "Strobe Light" Effect and the Identity Trap
+**The Problem:** The initial dynamic dataset produced an F1 score of exactly `0.0`. Because MODIS is a satellite in low Earth orbit, it only takes snapshots a few times a day. In hourly data, a fire would appear at 10:00 AM, the map would be completely blank at 11:00 AM, and a fire would reappear at 4:00 PM. 
+**The Failed Solution:** We initially applied a **24-hour persistence interpolation**. If a fire was detected at time $T$, we forward-filled that fire pixel for the next 24 hours. However, because $T$ and $T+1$ now overlapped by 99.9%, the model learned the "Identity Trap"—it simply copied the input to the output, achieving a 0.99 F1 score while fundamentally failing to learn any fluid dynamics or physics.
 
-### 4.2 The Normalization Blindness Bug
-**The Problem:** The dataset automatically normalized all inputs to a `[0, 1]` range based on the 2nd and 98th percentiles to handle outliers. However, because fires are extremely rare anomalies (< 0.1% of the map), the 98th percentile for `MODIS_FIRE_T1` and `Burn_Scar` was `0.0`. Therefore, the max value was saved as 0. When normalizing, the code inadvertently erased all actual fire pixels. The model was literally blind to the fire.
-**The Solution:** We explicitly hardcoded sparse, binary layers (`MODIS_FIRE_T1`, `Burn_Scar`) to bypass percentile scaling and utilize a hard maximum of `1.0`.
+### 4.2 The Hybrid Pivot: ML for Fuel + CA for Spread
+**The Solution:** Because the temporal resolution of satellites is fundamentally too low to teach a pure neural network fluid dynamics, we restructured the architecture:
+1. **Machine Learning:** The PyTorch UNet was stripped of its temporal sequence. It now predicts a static **Burn Susceptibility Map** based only on the weather and landscape.
+2. **Physics Engine:** The temporal advection (movement over time) was moved into a hard-coded **Cellular Automaton (CA)** in the Next.js React frontend. The CA looks at the underlying ML Susceptibility Map, checks the user's interactive Wind Speed and Direction sliders, and pushes the fire mathematically **day-by-day** across the valid fuel paths.
 
-### 4.3 The Temporal Leak Challenge (Current Research Focus)
-**The Problem:** Applying the 24-hour persistence fix introduced a new issue. For 23 out of 24 hours in a day, the input at time $T$ is identically equal to the target at time $T+1$. The model quickly learns to exploit this "data leak" by ignoring the weather entirely and just outputting the exact same fire map it received as input, resulting in artificially high F1 scores (~0.95).
-**Future Work:** Moving forward, the prediction target will be shifted from $T+1$ to $T+24$. By predicting exactly 24 hours into the future, we ensure the model is predicting the next fresh satellite snapshot, forcing it to actually calculate spread mechanics based on the accumulated weather data rather than relying on a copy-paste persistence leak.
+### 4.3 The Normalization Blindness Bug
+**The Problem:** The dataset automatically normalized all inputs to a `[0, 1]` range based on the 2nd and 98th percentiles to handle outliers. However, because fires are extremely rare anomalies (< 0.1% of the map), the 98th percentile for `Burn_Scar` was `0.0`. Therefore, the max value was saved as 0. When normalizing, the code inadvertently erased all actual historical scars.
+**The Solution:** We explicitly hardcoded sparse, binary layers to bypass percentile scaling and utilize a hard maximum of `1.0`.
 
 ---
 
