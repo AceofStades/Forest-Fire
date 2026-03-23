@@ -102,23 +102,40 @@ def get_event_data(model, idx: int, hours: int = 48) -> dict:
     if pad_h > 0 or pad_w > 0:
         probs = probs[:h, :w]
 
-    # 2. Extract Ground Truth Sequence (Sparse)
-    ground_truth = []
-    # Since the frontend is now requesting "days", we need to multiply the requested days by 24
-    # to get the total hourly steps, and then step through the dataset every 24 hours.
-    total_requested_hours = hours * 24
-    end_idx = min(idx + total_requested_hours, total_steps)
-
-    # We slice the array but take a step of 24 to get exactly 1 frame per day
-    fire_sequence = (
-        ds_loaded["MODIS_FIRE_T1"].isel(valid_time=slice(idx, end_idx, 24)).values
+    # 2. Extract Ground Truth Sequence (Sparse) from RAW un-interpolated dataset
+    raw_nc_path = os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "../../Model/dataset/final_feature_stack_DYNAMIC_new.nc",
+        )
     )
 
-    for t in range(fire_sequence.shape[0]):
-        rows, cols = np.where(fire_sequence[t] > 0)
-        frame_coords = [[int(r), int(c)] for r, c in zip(rows, cols)]
-        ground_truth.append(frame_coords)
+    ground_truth = []
+    total_requested_hours = hours * 24
 
+    if os.path.exists(raw_nc_path):
+        import xarray as xr
+
+        with xr.open_dataset(raw_nc_path, engine="h5netcdf") as raw_ds:
+            fire_raw = raw_ds["MODIS_FIRE_T1"].values
+            end_idx = min(idx + total_requested_hours, len(fire_raw))
+
+            for t in range(idx, end_idx, 24):
+                # Take the max over the 24 hour period to capture any satellite flash that day
+                daily_fire = fire_raw[t : min(t + 24, len(fire_raw))].max(axis=0)
+                rows, cols = np.where(daily_fire > 0)
+                frame_coords = [[int(r), int(c)] for r, c in zip(rows, cols)]
+                ground_truth.append(frame_coords)
+    else:
+        # Fallback to interpolated dataset logic if raw isn't available
+        end_idx = min(idx + total_requested_hours, total_steps)
+        fire_sequence = (
+            ds_loaded["MODIS_FIRE_T1"].isel(valid_time=slice(idx, end_idx, 24)).values
+        )
+        for t in range(fire_sequence.shape[0]):
+            rows, cols = np.where(fire_sequence[t] > 0)
+            frame_coords = [[int(r), int(c)] for r, c in zip(rows, cols)]
+            ground_truth.append(frame_coords)
     # Convert initial fire
     init_fire = ds_loaded["MODIS_FIRE_T1"].isel(valid_time=idx).values
     init_rows, init_cols = np.where(init_fire > 0)

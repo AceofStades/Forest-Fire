@@ -206,6 +206,10 @@ export default function MapSimulation() {
                 const idx = r * COLS + c;
                 if (stateGrid.current[idx] === 0) {
                     let hasNeighbor = false;
+                    let neighborR = -1;
+                    let neighborC = -1;
+
+                    // Check 8-way neighbors
                     for (let dr = -1; dr <= 1; dr++) {
                         for (let dc = -1; dc <= 1; dc++) {
                             if (dr === 0 && dc === 0) continue;
@@ -214,6 +218,8 @@ export default function MapSimulation() {
                             if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
                                 if (stateGrid.current[nr * COLS + nc] === 1) {
                                     hasNeighbor = true;
+                                    neighborR = nr;
+                                    neighborC = nc;
                                     break;
                                 }
                             }
@@ -222,7 +228,6 @@ export default function MapSimulation() {
                     }
 
                     if (hasNeighbor) {
-                        // FIX: Safely access probGrid and default to 0.05
                         let prob =
                             (probGrid && probGrid[r] && probGrid[r][c]) !==
                             undefined
@@ -230,9 +235,29 @@ export default function MapSimulation() {
                                 : 0.05;
 
                         if (isSandbox) {
-                            // Apply wind bias based on direction and speed.
-                            // This is a rough estimation adding an overall factor, more realistic CA checks angle to neighbor.
-                            prob *= 1 + windSpeed / 40;
+                            // In sandbox mode, we want the fire to be highly responsive to user clicks and wind.
+                            prob = prob * 1.5;
+
+                            const windAngleRad =
+                                (windDir - 90) * (Math.PI / 180);
+                            const windVecR = Math.sin(windAngleRad);
+                            const windVecC = Math.cos(windAngleRad);
+                            const spreadVecR = r - neighborR;
+                            const spreadVecC = c - neighborC;
+                            const dotProduct =
+                                spreadVecR * windVecR + spreadVecC * windVecC;
+
+                            if (dotProduct > 0) {
+                                prob += (windSpeed / 100) * 0.5 * dotProduct;
+                            } else {
+                                prob -=
+                                    (windSpeed / 100) *
+                                    0.2 *
+                                    Math.abs(dotProduct);
+                            }
+                        } else {
+                            // Historical mode: gentle base probability multiplier for realistic 24-hour spread
+                            prob = prob * 1.5 + 0.01;
                         }
 
                         if (Math.random() < prob) {
@@ -240,10 +265,28 @@ export default function MapSimulation() {
                         }
                     }
                 } else if (stateGrid.current[idx] === 1) {
-                    if (Math.random() < 0.1) nextState[idx] = 2; // Burn out
+                    // Burn out logic: Since each step is a full 24 hours, fire should naturally exhaust its local fuel quickly.
+                    // 70% chance a pixel finishes burning and turns to ash (state 2) in a single day.
+                    if (Math.random() < 0.7) nextState[idx] = 2; // Burn out
                 }
             }
         }
+
+        // If in historical mode, inject actual new satellite fires into the simulation so it can predict their subsequent spread
+        if (
+            !isSandbox &&
+            eventData.groundTruth &&
+            timeStep + 1 < eventData.groundTruth.length
+        ) {
+            const actualFires = eventData.groundTruth[timeStep + 1];
+            if (actualFires) {
+                actualFires.forEach(([r, c]) => {
+                    // Inject spontaneous/new real-world ignitions into the simulation
+                    nextState[r * COLS + c] = 1;
+                });
+            }
+        }
+
         stateGrid.current = nextState;
 
         // Truncate any future history if we generated a new branch, then add new state
@@ -258,19 +301,16 @@ export default function MapSimulation() {
         let interval: NodeJS.Timeout;
         if (isPlaying) {
             interval = setInterval(() => {
-                setEventData((currentData) => {
-                    if (!isSandbox && currentData && timeStep >= 30) {
-                        setIsPlaying(false);
-                    } else if (currentData) {
-                        runCAStep();
-                    }
-                    return currentData;
-                });
+                if (!isSandbox && timeStep >= 30) {
+                    setIsPlaying(false);
+                } else {
+                    runCAStep();
+                }
             }, 500);
         }
         return () => clearInterval(interval);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isPlaying, isSandbox, windSpeed, windDir, timeStep]);
+    }, [isPlaying, isSandbox, timeStep, eventData]);
 
     const renderCanvas = (data: EventData, currentTime: number = timeStep) => {
         const cvs = offscreenCanvasRef.current;
@@ -305,11 +345,18 @@ export default function MapSimulation() {
                 data.groundTruth.length - 1,
             );
             if (data.groundTruth[actualTime]) {
-                ctx.fillStyle =
-                    viewMode === "compare"
-                        ? "rgba(0, 255, 0, 0.6)"
-                        : "rgba(255, 0, 0, 0.8)";
                 data.groundTruth[actualTime].forEach(([r, c]) => {
+                    if (viewMode === "compare") {
+                        const isPredicted =
+                            stateGrid.current[r * COLS + c] === 1;
+                        if (isPredicted) {
+                            ctx.fillStyle = "rgba(128, 0, 128, 0.8)"; // Purple for overlap
+                        } else {
+                            ctx.fillStyle = "rgba(0, 255, 0, 0.6)"; // Green for actual only
+                        }
+                    } else {
+                        ctx.fillStyle = "rgba(255, 0, 0, 0.8)"; // Red for actual mode
+                    }
                     ctx.fillRect(c, r, 1, 1);
                 });
             }
