@@ -19,9 +19,21 @@ def _resolve_path(nc_path):
     """Try to find the dataset file."""
     if os.path.exists(nc_path):
         return nc_path
-    alt = os.path.join("Model", nc_path)
-    if os.path.exists(alt):
-        return alt
+
+    # Check if running from Model/training/custom_dataset
+    alt1 = os.path.join("../../", nc_path)
+    if os.path.exists(alt1):
+        return alt1
+
+    # Check if running from Model/
+    alt2 = os.path.join("../", nc_path)
+    if os.path.exists(alt2):
+        return alt2
+
+    alt3 = os.path.join("Model", nc_path)
+    if os.path.exists(alt3):
+        return alt3
+
     return nc_path  # let it fail with a clear path
 
 
