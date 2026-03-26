@@ -42,12 +42,12 @@ Fire:        PrevFireMask (Day 1 fire footprint)
 
 | Status | ID | Task | Details |
 |--------|----|----- |---------|
-| ⏳ | 3a | Confirm UNet architecture | Verify n_channels=12, output=1, works with 64×64 |
-| ⏳ | 3b | Create script skeleton | argparse, device, epoch loop, checkpoint saving |
-| ⏳ | 3c | Add Combined Loss | Focal (α=0.95, γ=2.0) + Dice for imbalance |
-| ⏳ | 3d | Add evaluation metrics | Accuracy, Precision, Recall, F1 at thresholds |
-| ⏳ | 3e | Add training logging | Loss/metrics/LR per epoch; TensorBoard/wandb |
-| ⏳ | 3f | Add early stopping | Stop if val F1 stagnates, save best checkpoint |
+| ✅ | 3a | Confirm UNet architecture | UNet accepts n_channels=12, outputs [B,1,64,64] ✓ |
+| ✅ | 3b | Create script skeleton | argparse, device, epoch loop, checkpoint saving |
+| ✅ | 3c | Add Combined Loss | FocalLoss (α=0.95, γ=2.0) + DiceLoss |
+| ✅ | 3d | Add evaluation metrics | Accuracy, Precision, Recall, F1 + threshold sweep |
+| ✅ | 3e | Add training logging | Loss/metrics/LR per epoch with tqdm progress |
+| ✅ | 3f | Add early stopping | Patience-based stopping + best checkpoint saving |
 
 ---
 
@@ -98,4 +98,4 @@ Fire:        PrevFireMask (Day 1 fire footprint)
 ---
 
 **Last Updated:** 2026-03-26  
-**Current Task:** 1c - Verify dataset integrity
+**Current Task:** Phase 4 - Training Execution (smoke test)
