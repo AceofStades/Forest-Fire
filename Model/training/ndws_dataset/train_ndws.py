@@ -266,7 +266,7 @@ def main():
     criterion = CombinedLoss(focal_weight=0.5, alpha=0.95, gamma=2.0)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=5, verbose=True
+        optimizer, mode="max", factor=0.5, patience=5
     )
     
     # Resume if specified
