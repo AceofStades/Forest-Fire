@@ -9,6 +9,9 @@ import {
 } from "react-leaflet";
 import { Navigation } from "@/components/navigation";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
+
 
 interface EventData {
     probGrid: number[][];
@@ -103,6 +106,11 @@ export default function MapSimulation() {
     const [windSpeed, setWindSpeed] = useState<number>(10);
     const [windDir, setWindDir] = useState<number>(90);
     const [isSandbox, setIsSandbox] = useState<boolean>(false);
+
+    const [humidity, setHumidity] = useState<number>(25);
+    const [ignitionThreshold, setIgnitionThreshold] = useState<number>(0.6);
+    const [mapLayer, setMapLayer] = useState<"dark" | "satellite" | "terrain">("dark");
+
 
     const [imageUrl, setImageUrl] = useState<string>("");
 
@@ -235,25 +243,30 @@ export default function MapSimulation() {
                                 : 0.05;
 
                         if (isSandbox) {
-                            // In sandbox mode, we want the fire to be highly responsive to user clicks and wind.
+                            // Apply advanced physics parameters
+                            // 1. Base ML probability boosted for sandbox scale
                             prob = prob * 1.5;
 
-                            const windAngleRad =
-                                (windDir - 90) * (Math.PI / 180);
-                            const windVecR = Math.sin(windAngleRad);
-                            const windVecC = Math.cos(windAngleRad);
+                            // 2. Humidity Factor: high humidity dampens spread significantly
+                            const hf = 1 - (humidity / 100) * 0.8; // e.g. 100% humidity leaves 20% prob
+                            prob *= hf;
+
+                            // 3. Smooth Wind Bias (Cosine-based curve)
                             const spreadVecR = r - neighborR;
                             const spreadVecC = c - neighborC;
-                            const dotProduct =
-                                spreadVecR * windVecR + spreadVecC * windVecC;
+                            // atan2(y, x). Note: grid row is y downwards, col is x rightwards.
+                            const angle = Math.atan2(spreadVecR, spreadVecC) * (180 / Math.PI);
+                            let diff = Math.abs(((angle - windDir + 540) % 360) - 180);
+                            const windBias = Math.cos((diff * Math.PI) / 180); // -1 to 1
+                            
+                            // Exponential wind scaling for realism
+                            const wf = 1 + windBias * (windSpeed / 20); 
+                            prob *= Math.max(0.1, wf); // Don't let it drop strictly to 0
 
-                            if (dotProduct > 0) {
-                                prob += (windSpeed / 100) * 0.5 * dotProduct;
-                            } else {
-                                prob -=
-                                    (windSpeed / 100) *
-                                    0.2 *
-                                    Math.abs(dotProduct);
+                            // 4. Ignition Threshold Barrier
+                            // If base probability is below the strict threshold, it requires a lucky roll to spark
+                            if (prob < ignitionThreshold) {
+                                prob *= 0.1; // heavily penalize
                             }
                         } else {
                             // Historical mode: gentle base probability multiplier for realistic 24-hour spread
@@ -380,40 +393,36 @@ export default function MapSimulation() {
                         Fire Dynamics Engine
                     </h2>
 
-                    {/* Historical Events */}
-                    <div className="space-y-3">
-                        <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">
-                            Historical Scenarios
-                        </h3>
-                        {events.map((ev) => (
-                            <Button
-                                key={ev.id}
-                                variant={
-                                    selectedEventId === ev.id
-                                        ? "default"
-                                        : "outline"
-                                }
-                                className="w-full justify-start border-slate-700"
-                                onClick={() => loadEvent(ev.id)}
-                            >
-                                {ev.name}
-                            </Button>
-                        ))}
-                    </div>
+                    <Tabs defaultValue="historical" className="w-full" onValueChange={(v) => {
+                        if (v === "sandbox") enableSandbox();
+                        // if historical, maybe clear sandbox but we wait for event click
+                    }}>
+                        <TabsList className="grid w-full grid-cols-2 bg-slate-800 text-slate-400 mb-4">
+                            <TabsTrigger value="historical" className="data-[state=active]:bg-slate-700 data-[state=active]:text-white">Historical</TabsTrigger>
+                            <TabsTrigger value="sandbox" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white">Sandbox</TabsTrigger>
+                        </TabsList>
 
-                    <div className="h-px bg-slate-800 my-2"></div>
+                        <TabsContent value="historical" className="space-y-3">
+                            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                                Event Analysis
+                            </h3>
+                            {events.map((ev) => (
+                                <Button
+                                    key={ev.id}
+                                    variant={
+                                        selectedEventId === ev.id && !isSandbox
+                                            ? "default"
+                                            : "outline"
+                                    }
+                                    className="w-full justify-start border-slate-700"
+                                    onClick={() => loadEvent(ev.id)}
+                                >
+                                    {ev.name}
+                                </Button>
+                            ))}
+                        </TabsContent>
 
-                    {/* Sandbox Mode */}
-                    <div className="space-y-4">
-                        <Button
-                            variant={isSandbox ? "default" : "outline"}
-                            className="w-full border-blue-600/50 hover:bg-blue-900/30"
-                            onClick={enableSandbox}
-                        >
-                            Interactive Sandbox Mode
-                        </Button>
-
-                        {isSandbox && (
+                        <TabsContent value="sandbox" className="space-y-4">
                             <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700 space-y-4 text-sm">
                                 <p className="text-slate-300 mb-2 font-semibold text-blue-400">
                                     Right-Click on the map to ignite a fire.
@@ -422,43 +431,58 @@ export default function MapSimulation() {
                                 <div className="space-y-2">
                                     <div className="flex justify-between">
                                         <span>Wind Speed</span>
-                                        <span className="text-orange-400">
-                                            {windSpeed} km/h
-                                        </span>
+                                        <span className="text-orange-400">{windSpeed} km/h</span>
                                     </div>
-                                    <input
-                                        type="range"
-                                        min="0"
-                                        max="100"
-                                        value={windSpeed}
-                                        onChange={(e) =>
-                                            setWindSpeed(Number(e.target.value))
-                                        }
-                                        className="w-full accent-orange-500"
-                                    />
+                                    <input type="range" min="0" max="100" value={windSpeed} onChange={(e) => setWindSpeed(Number(e.target.value))} className="w-full accent-orange-500" />
                                 </div>
 
                                 <div className="space-y-2 pt-2">
                                     <div className="flex justify-between">
                                         <span>Wind Direction</span>
-                                        <span className="text-blue-400">
-                                            {windDir}°
-                                        </span>
+                                        <span className="text-blue-400">{windDir}°</span>
                                     </div>
-                                    <input
-                                        type="range"
-                                        min="0"
-                                        max="360"
-                                        value={windDir}
-                                        onChange={(e) =>
-                                            setWindDir(Number(e.target.value))
-                                        }
-                                        className="w-full accent-blue-500"
-                                    />
+                                    <input type="range" min="0" max="360" value={windDir} onChange={(e) => setWindDir(Number(e.target.value))} className="w-full accent-blue-500" />
+                                </div>
+
+                                <div className="space-y-2 pt-2">
+                                    <div className="flex justify-between">
+                                        <span>Humidity</span>
+                                        <span className="text-teal-400">{humidity}%</span>
+                                    </div>
+                                    <input type="range" min="0" max="100" value={humidity} onChange={(e) => setHumidity(Number(e.target.value))} className="w-full accent-teal-500" />
+                                </div>
+
+                                <div className="space-y-2 pt-2">
+                                    <div className="flex justify-between">
+                                        <span>Ignition Threshold</span>
+                                        <span className="text-red-400">{ignitionThreshold.toFixed(2)}</span>
+                                    </div>
+                                    <input type="range" min="0" max="1" step="0.05" value={ignitionThreshold} onChange={(e) => setIgnitionThreshold(Number(e.target.value))} className="w-full accent-red-500" />
                                 </div>
                             </div>
-                        )}
+                        </TabsContent>
+                    </Tabs>
+
+                    <div className="mt-4 pt-4 border-t border-slate-800">
+                        <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
+                            Map Layers
+                        </h3>
+                        <div className="flex flex-col gap-2">
+                            <Button variant={mapLayer === "dark" ? "secondary" : "ghost"} onClick={() => setMapLayer("dark")} className="justify-start text-xs h-8">
+                                <div className="w-3 h-3 bg-slate-800 rounded-full mr-2 border border-slate-600"></div>
+                                Dark Matter (Default)
+                            </Button>
+                            <Button variant={mapLayer === "satellite" ? "secondary" : "ghost"} onClick={() => setMapLayer("satellite")} className="justify-start text-xs h-8">
+                                <div className="w-3 h-3 bg-green-700 rounded-full mr-2 border border-green-500"></div>
+                                Satellite Vegetation
+                            </Button>
+                            <Button variant={mapLayer === "terrain" ? "secondary" : "ghost"} onClick={() => setMapLayer("terrain")} className="justify-start text-xs h-8">
+                                <div className="w-3 h-3 bg-amber-700 rounded-full mr-2 border border-amber-500"></div>
+                                Topography & Terrain
+                            </Button>
+                        </div>
                     </div>
+
 
                     {/* Controls */}
                     {eventData && (
@@ -577,11 +601,24 @@ export default function MapSimulation() {
                             background: "#0f172a",
                         }}
                     >
-                        {/* Dark matter map tiles for good contrast */}
-                        <TileLayer
-                            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-                            attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-                        />
+                        {mapLayer === "dark" && (
+                            <TileLayer
+                                url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                                attribution='&copy; <a href="https://carto.com/">CARTO</a>'
+                            />
+                        )}
+                        {mapLayer === "satellite" && (
+                            <TileLayer
+                                url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                                attribution="Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community"
+                            />
+                        )}
+                        {mapLayer === "terrain" && (
+                            <TileLayer
+                                url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}"
+                                attribution="Tiles &copy; Esri &mdash; Source: USGS, Esri, TANA, DeLorme, and NPS"
+                            />
+                        )}
 
                         {/* Model Bounds Box */}
                         <Rectangle
@@ -613,6 +650,36 @@ export default function MapSimulation() {
                         direction={windDir}
                         isSandbox={isSandbox}
                     />
+
+                    {/* Current Conditions Overlay */}
+                    <div className="absolute top-4 right-4 z-[500] bg-slate-900/90 backdrop-blur border border-slate-700 p-4 rounded-lg shadow-xl w-64">
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Live Environment</h4>
+                        <div className="space-y-3">
+                            <div className="flex justify-between items-center text-sm">
+                                <span className="text-slate-300">Map Mode</span>
+                                <span className="font-medium text-blue-400 capitalize">{mapLayer}</span>
+                            </div>
+                            <div className="flex justify-between items-center text-sm">
+                                <span className="text-slate-300">Humidity</span>
+                                <span className="font-medium text-teal-400">{isSandbox ? humidity : 45}%</span>
+                            </div>
+                            <div className="flex justify-between items-center text-sm">
+                                <span className="text-slate-300">Wind</span>
+                                <span className="font-medium text-orange-400">{isSandbox ? windSpeed : 12} km/h</span>
+                            </div>
+                            <div className="flex justify-between items-center text-sm">
+                                <span className="text-slate-300">Fire Danger</span>
+                                <div className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                    isSandbox 
+                                        ? (humidity < 30 && windSpeed > 40 ? "bg-red-900/50 text-red-500" : "bg-orange-900/50 text-orange-500") 
+                                        : "bg-red-900/50 text-red-500"
+                                }`}>
+                                    {isSandbox ? (humidity < 30 && windSpeed > 40 ? "EXTREME" : "HIGH") : "HIGH"}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
             </div>
         </div>
