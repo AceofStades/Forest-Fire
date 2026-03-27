@@ -24,14 +24,14 @@ import { useTheme } from "next-themes";
 
 const navigation = [
     { name: "Home", href: "/", icon: Home },
-    { name: "Dashboard", href: "/dashboard", icon: Map },
+    // { name: "Dashboard", href: "/dashboard", icon: Map },
     // { name: "Chat", href: "/chat", icon: Brain },
     { name: "Upload & Predict", href: "/upload", icon: Upload },
     // { name: "Upload & Predict", href: "/upload1", icon: Upload },
     // { name: "2D to 3D Convert", href: "/2d-to-3d", icon: Layers3 },
     // { name: "3D Visualization", href: "/3d", icon: Box },
-    { name: "Simulation", href: "/simulation", icon: Layers3 },
-    { name: "ML Simulation", href: "/Simulation2", icon: Brain },
+    // { name: "Simulation", href: "/simulation", icon: Layers3 },
+    { name: "Interactive Dashboard", href: "/interactive-dashboard", icon: Layers3 },
     { name: "ML Insights", href: "/ml-insights", icon: Brain },
     { name: "Model Comparison", href: "/model-comparison", icon: Brain },
     { name: "Analytics", href: "/analytics", icon: BarChart3 },
