@@ -33,7 +33,6 @@ const navigation = [
     // { name: "Simulation", href: "/simulation", icon: Layers3 },
     { name: "Interactive Dashboard", href: "/interactive-dashboard", icon: Layers3 },
     { name: "ML Insights", href: "/ml-insights", icon: Brain },
-    { name: "Model Comparison", href: "/model-comparison", icon: Brain },
     { name: "Analytics", href: "/analytics", icon: BarChart3 },
     { name: "Download Report", href: "/report", icon: Download },
     { name: "About", href: "/about", icon: Info },
