@@ -306,3 +306,5 @@ Model/vishal-datasets
 *.pth
 #Model/checkouts/
 checkouts/
+
+.env*
