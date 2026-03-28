@@ -6,7 +6,7 @@ The **Forest-Fire** prediction project is an advanced, full-stack application ai
 The project has evolved significantly over its lifecycle:
 - **Phase 1 (Legacy Implementation - Feb 2025):** The original models focused on relatively static datasets. We implemented a basic `UNet`, an `LSTM`, a `ConvLSTM`, and a `HybridFireNet` (combining a spatial UNet encoder with a temporal ConvLSTM bottleneck). The data pipeline was static, often evaluating single frames without a continuous spatiotemporal flow.
 - **Phase 2 (Dynamic Spatiotemporal Pipeline - Current):** To predict actual *spread*, we transitioned to a fully dynamic, hourly 4D dataset. We ingested satellite fire spots, hourly meteorological data, and static topological maps, merging them into a unified `.nc` (NetCDF) feature stack. The architectures were refined down to two core, highly optimized implementations: a spatial **UNet** and a spatiotemporal **ConvLSTM**.
-- **Phase 3 (Integration & Simulation):** The backend was built using FastAPI to serve model inferences to a modern Next.js 15 React application. Crucially, a **D* Lite** pathfinding algorithm was integrated to calculate safe evacuation routes dynamically based on the predicted fire probabilities.
+- **Phase 3 (Integration & Unified Dashboard):** The backend was built using FastAPI to serve model inferences to a modern Next.js 15 React application. We consolidated fragmented simulation pages into a single, unified `interactive-dashboard`. Crucially, a **D* Lite** pathfinding algorithm was integrated to calculate safe evacuation routes dynamically based on predicted fire probabilities and real-time interactive simulation states.
 
 ---
 
