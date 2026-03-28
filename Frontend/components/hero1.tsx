@@ -60,16 +60,16 @@ const Hero1 = () => {
                             size="lg"
                             className="bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700"
                         >
-                            <Link href="/dashboard">
+                            <Link href="/interactive-dashboard">
                                 <Map className="mr-2 h-5 w-5" />
                                 Explore Dashboard
                             </Link>
                         </Button>
 
                         <Button asChild variant="outline" size="lg" className="text-white border-white hover:bg-white/10">
-                            <Link href="/simulation">
+                            <Link href="/ml-insights">
                                 <Layers3 className="mr-2 h-5 w-5" />
-                                Simulation
+                                ML Insights
                             </Link>
                         </Button>
                     </div>

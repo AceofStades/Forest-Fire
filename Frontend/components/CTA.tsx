@@ -17,7 +17,7 @@ const CTA = () => {
                         size="lg"
                         className="bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700"
                     >
-                        <Link href="/dashboard">Start Exploring</Link>
+                        <Link href="/interactive-dashboard">Start Exploring</Link>
                     </Button>
                     <Button asChild variant="outline" size="lg">
                         <Link href="/2d-to-3d"className='text-2xl' >Try 2D to 3D</Link>
