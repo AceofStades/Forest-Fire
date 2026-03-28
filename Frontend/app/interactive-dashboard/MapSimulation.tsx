@@ -104,6 +104,7 @@ export default function MapSimulation() {
     const [evacGoal, setEvacGoal] = useState<[number, number] | null>(null);
     const [safePath, setSafePath] = useState<[number, number][]>([]);
     const [isCalculatingPath, setIsCalculatingPath] = useState(false);
+    const [routingStatus, setRoutingStatus] = useState<string>("");
 
     // Sandbox Settings
     const [windSpeed, setWindSpeed] = useState<number>(10);
@@ -140,6 +141,7 @@ export default function MapSimulation() {
     const calculateSafePath = async (startTuple: [number, number], goalTuple: [number, number]) => {
         if (!eventData) return;
         setIsCalculatingPath(true);
+        setRoutingStatus("Routing...");
 
         // Collect all active fires from the current stateGrid
         const activeFires: [number, number][] = [];
@@ -155,6 +157,7 @@ export default function MapSimulation() {
             const apiKey = process.env.NEXT_PUBLIC_ORS_API_KEY;
 
             if (apiKey && apiKey.length > 10) {
+                setRoutingStatus("ORS Vector Routing...");
                 // OPENROUTESERVICE VECTOR ROUTING
                 const startLatLng = rowColToLatLng(startTuple[0], startTuple[1]);
                 const goalLatLng = rowColToLatLng(goalTuple[0], goalTuple[1]);
@@ -194,6 +197,9 @@ export default function MapSimulation() {
                     ]];
                 });
 
+                // ONLY send polygons if there are less than 20 blocks. ORS errors on too many polygons.
+                const avoidPolygons = polygons.length > 0 && polygons.length <= 25 ? polygons : undefined;
+
                 const requestBody: any = {
                     coordinates: [
                         [startLatLng[1], startLatLng[0]], // Start [lon, lat]
@@ -201,10 +207,10 @@ export default function MapSimulation() {
                     ],
                 };
 
-                if (polygons.length > 0) {
+                if (avoidPolygons) {
                     requestBody.options = {
                         avoid_polygons: {
-                            coordinates: polygons,
+                            coordinates: avoidPolygons,
                             type: "MultiPolygon"
                         }
                     };
@@ -225,11 +231,16 @@ export default function MapSimulation() {
                     const coords = data.features[0].geometry.coordinates;
                     const latLngPath = coords.map((c: number[]) => [c[1], c[0]] as [number, number]);
                     setSafePath(latLngPath);
+                    setRoutingStatus("ORS Route Active");
                     setIsCalculatingPath(false);
                     return; // Exit successfully
                 } else {
                     console.warn("ORS routing failed or no path found, falling back to D* Lite...", data);
+                    const errorMsg = data.error?.message || "No Route Found";
+                    setRoutingStatus(`ORS Failed: ${errorMsg}. Falling back...`);
                 }
+            } else {
+                setRoutingStatus("ORS Key Missing. Fallback D* Lite...");
             }
 
             // FALLBACK TO BACKEND D* LITE
@@ -247,9 +258,13 @@ export default function MapSimulation() {
                 // Convert row/col to lat/lng for Polyline
                 const latLngPath = data.path.map((coord: [number, number]) => rowColToLatLng(coord[0], coord[1]));
                 setSafePath(latLngPath);
+                if (!routingStatus.includes("ORS Key Missing") && !routingStatus.includes("ORS Failed")) {
+                     setRoutingStatus("D* Lite Route Active");
+                }
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error("Pathfinding error:", error);
+            setRoutingStatus("Routing Error");
         } finally {
             setIsCalculatingPath(false);
         }
@@ -340,6 +355,7 @@ export default function MapSimulation() {
         setEvacStart(null);
         setEvacGoal(null);
         setSafePath([]);
+        setRoutingStatus("");
     };
 
     const runCAStep = () => {
@@ -635,9 +651,15 @@ export default function MapSimulation() {
                             </div>
                         </div>
                         
-                        {isCalculatingPath && (
-                            <div className="flex items-center px-3 py-1.5 bg-slate-900/90 backdrop-blur-md border border-indigo-500/50 rounded-lg text-indigo-400 text-sm font-medium animate-pulse shadow-xl">
-                                <Route className="w-4 h-4 mr-2" /> D* Lite Routing...
+                        {routingStatus && (
+                            <div className={`flex items-center px-3 py-1.5 bg-slate-900/90 backdrop-blur-md border rounded-lg text-sm font-medium shadow-xl ${
+                                routingStatus.includes("ORS") && !routingStatus.includes("Failed") 
+                                    ? "border-emerald-500/50 text-emerald-400" 
+                                    : routingStatus.includes("Routing...") 
+                                        ? "border-indigo-500/50 text-indigo-400 animate-pulse"
+                                        : "border-orange-500/50 text-orange-400"
+                            }`}>
+                                <Route className="w-4 h-4 mr-2" /> {routingStatus}
                             </div>
                         )}
                     </div>
