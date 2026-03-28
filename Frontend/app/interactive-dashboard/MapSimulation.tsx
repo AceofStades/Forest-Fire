@@ -140,11 +140,26 @@ export default function MapSimulation() {
     const calculateSafePath = async (startTuple: [number, number], goalTuple: [number, number]) => {
         if (!eventData) return;
         setIsCalculatingPath(true);
+
+        // Collect all active fires from the current stateGrid
+        const activeFires: [number, number][] = [];
+        for (let r = 0; r < ROWS; r++) {
+            for (let c = 0; c < COLS; c++) {
+                if (stateGrid.current[r * COLS + c] === 1) {
+                    activeFires.push([r, c]);
+                }
+            }
+        }
+
         try {
             const response = await fetch("http://127.0.0.1:8000/get-safe-path", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ start: startTuple, goal: goalTuple }),
+                body: JSON.stringify({ 
+                    start: startTuple, 
+                    goal: goalTuple,
+                    active_fires: activeFires 
+                }),
             });
             const data = await response.json();
             if (data.path) {
@@ -165,7 +180,7 @@ export default function MapSimulation() {
             calculateSafePath(evacStart, evacGoal);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [evacStart, evacGoal]);
+    }, [evacStart, evacGoal, timeStep]); // Re-calc on step change too
 
     const loadEvent = async (id: number) => {
         setSelectedEventId(id);
@@ -493,51 +508,53 @@ export default function MapSimulation() {
                 <div className="flex-1 relative bg-slate-950 overflow-hidden flex flex-col">
                     
                     {/* Top Toolbar (Floating inside Map) */}
-                    <div className="absolute top-4 left-4 z-[500] flex gap-2">
-                        {isSandbox && (
+                    <div className="absolute top-4 right-4 z-[500] flex flex-col items-end gap-2">
+                        <div className="flex gap-2">
+                            {isSandbox && (
+                                <div className="flex bg-slate-900/90 backdrop-blur-md border border-slate-700 rounded-lg p-1 shadow-xl">
+                                    <Button 
+                                        variant={interactionMode === 'ignite' ? 'default' : 'ghost'} 
+                                        size="sm" 
+                                        onClick={() => setInteractionMode('ignite')}
+                                        className={interactionMode === 'ignite' ? 'bg-orange-600 hover:bg-orange-700' : 'text-slate-400 hover:text-orange-400'}
+                                        title="Ignite Fire (Left Click)"
+                                    >
+                                        <Flame className="w-4 h-4 mr-1" /> Ignite
+                                    </Button>
+                                </div>
+                            )}
+
                             <div className="flex bg-slate-900/90 backdrop-blur-md border border-slate-700 rounded-lg p-1 shadow-xl">
                                 <Button 
-                                    variant={interactionMode === 'ignite' ? 'default' : 'ghost'} 
+                                    variant={interactionMode === 'start' ? 'secondary' : 'ghost'} 
                                     size="sm" 
-                                    onClick={() => setInteractionMode('ignite')}
-                                    className={interactionMode === 'ignite' ? 'bg-orange-600 hover:bg-orange-700' : 'text-slate-400 hover:text-orange-400'}
-                                    title="Ignite Fire (Left Click)"
+                                    onClick={() => setInteractionMode('start')}
+                                    className={interactionMode === 'start' ? 'bg-emerald-900/50 text-emerald-400 hover:bg-emerald-900/70' : 'text-slate-400 hover:text-emerald-400'}
                                 >
-                                    <Flame className="w-4 h-4 mr-1" /> Ignite
+                                    <MapPin className="w-4 h-4 mr-1" /> Set Evac Start
                                 </Button>
+                                <Button 
+                                    variant={interactionMode === 'goal' ? 'secondary' : 'ghost'} 
+                                    size="sm" 
+                                    onClick={() => setInteractionMode('goal')}
+                                    className={interactionMode === 'goal' ? 'bg-blue-900/50 text-blue-400 hover:bg-blue-900/70' : 'text-slate-400 hover:text-blue-400'}
+                                >
+                                    <Flag className="w-4 h-4 mr-1" /> Set Evac Goal
+                                </Button>
+                                
+                                {(evacStart || evacGoal || safePath.length > 0) && (
+                                    <div className="w-px bg-slate-700 mx-1 my-1"></div>
+                                )}
+                                {(evacStart || evacGoal || safePath.length > 0) && (
+                                    <Button variant="ghost" size="sm" onClick={clearPath} className="text-red-400 hover:text-red-300 hover:bg-red-950/50" title="Clear Path">
+                                        <Trash2 className="w-4 h-4" />
+                                    </Button>
+                                )}
                             </div>
-                        )}
-
-                        <div className="flex bg-slate-900/90 backdrop-blur-md border border-slate-700 rounded-lg p-1 shadow-xl">
-                            <Button 
-                                variant={interactionMode === 'start' ? 'secondary' : 'ghost'} 
-                                size="sm" 
-                                onClick={() => setInteractionMode('start')}
-                                className={interactionMode === 'start' ? 'bg-emerald-900/50 text-emerald-400 hover:bg-emerald-900/70' : 'text-slate-400 hover:text-emerald-400'}
-                            >
-                                <MapPin className="w-4 h-4 mr-1" /> Set Evac Start
-                            </Button>
-                            <Button 
-                                variant={interactionMode === 'goal' ? 'secondary' : 'ghost'} 
-                                size="sm" 
-                                onClick={() => setInteractionMode('goal')}
-                                className={interactionMode === 'goal' ? 'bg-blue-900/50 text-blue-400 hover:bg-blue-900/70' : 'text-slate-400 hover:text-blue-400'}
-                            >
-                                <Flag className="w-4 h-4 mr-1" /> Set Evac Goal
-                            </Button>
-                            
-                            {(evacStart || evacGoal || safePath.length > 0) && (
-                                <div className="w-px bg-slate-700 mx-1 my-1"></div>
-                            )}
-                            {(evacStart || evacGoal || safePath.length > 0) && (
-                                <Button variant="ghost" size="sm" onClick={clearPath} className="text-red-400 hover:text-red-300 hover:bg-red-950/50" title="Clear Path">
-                                    <Trash2 className="w-4 h-4" />
-                                </Button>
-                            )}
                         </div>
                         
                         {isCalculatingPath && (
-                            <div className="flex items-center px-3 bg-slate-900/90 backdrop-blur-md border border-indigo-500/50 rounded-lg text-indigo-400 text-sm font-medium animate-pulse">
+                            <div className="flex items-center px-3 py-1.5 bg-slate-900/90 backdrop-blur-md border border-indigo-500/50 rounded-lg text-indigo-400 text-sm font-medium animate-pulse shadow-xl">
                                 <Route className="w-4 h-4 mr-2" /> D* Lite Routing...
                             </div>
                         )}
