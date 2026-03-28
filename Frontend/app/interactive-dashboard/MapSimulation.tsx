@@ -205,6 +205,7 @@ export default function MapSimulation() {
                         [startLatLng[1], startLatLng[0]], // Start [lon, lat]
                         [goalLatLng[1], goalLatLng[0]]    // Goal [lon, lat]
                     ],
+                    radiuses: [-1, -1] // -1 means unlimited radius to find the nearest road
                 };
 
                 if (avoidPolygons) {
