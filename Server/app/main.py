@@ -57,6 +57,7 @@ app.add_middleware(
 class PathRequest(BaseModel):
     start: List[int]  # [row, col]
     goal: List[int]  # [row, col]
+    active_fires: List[List[int]] = []  # List of current active fire pixels
 
 
 # 4. Endpoints
@@ -102,9 +103,17 @@ async def upload_data(
 
 @app.post("/get-safe-path")
 async def get_safe_path(req: PathRequest):
-    grid = ml_artifacts.get("fire_grid")
-    if grid is None:
+    base_grid = ml_artifacts.get("fire_grid")
+    if base_grid is None:
         raise HTTPException(status_code=500, detail="Fire data not loaded")
+
+    # Create a copy of the grid to apply current dynamic fires
+    grid = base_grid.copy()
+    for fire_pixel in req.active_fires:
+        if len(fire_pixel) == 2:
+            r, c = fire_pixel
+            if 0 <= r < grid.shape[0] and 0 <= c < grid.shape[1]:
+                grid[r, c] = 1.0  # Max out probability so D* Lite avoids it heavily
 
     start_tuple = tuple(req.start)
     goal_tuple = tuple(req.goal)
