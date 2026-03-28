@@ -111,7 +111,7 @@ export default function MapSimulation() {
     const [isSandbox, setIsSandbox] = useState<boolean>(false);
     const [humidity, setHumidity] = useState<number>(25);
     const [ignitionThreshold, setIgnitionThreshold] = useState<number>(0.3);
-    const [mapLayer, setMapLayer] = useState<"dark" | "satellite" | "terrain">("dark");
+    const [mapLayer, setMapLayer] = useState<"dark" | "satellite" | "terrain" | "streets">("dark");
     const [imageUrl, setImageUrl] = useState<string>("");
 
     const ROWS = 320;
@@ -565,10 +565,11 @@ export default function MapSimulation() {
                     <div className="mt-auto space-y-4">
                         <div className="pt-4 border-t border-slate-800">
                             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Map Topology</h3>
-                            <div className="grid grid-cols-3 gap-2">
+                            <div className="grid grid-cols-2 gap-2">
                                 <Button variant={mapLayer === "dark" ? "secondary" : "outline"} onClick={() => setMapLayer("dark")} className="h-10 text-xs bg-slate-800 border-slate-700">Dark</Button>
                                 <Button variant={mapLayer === "satellite" ? "secondary" : "outline"} onClick={() => setMapLayer("satellite")} className="h-10 text-xs bg-slate-800 border-slate-700">Sat</Button>
                                 <Button variant={mapLayer === "terrain" ? "secondary" : "outline"} onClick={() => setMapLayer("terrain")} className="h-10 text-xs bg-slate-800 border-slate-700">Terr</Button>
+                                <Button variant={mapLayer === "streets" ? "secondary" : "outline"} onClick={() => setMapLayer("streets")} className="h-10 text-xs bg-slate-800 border-slate-700">Streets</Button>
                             </div>
                         </div>
 
@@ -646,6 +647,7 @@ export default function MapSimulation() {
                             {mapLayer === "dark" && <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />}
                             {mapLayer === "satellite" && <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" />}
                             {mapLayer === "terrain" && <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}" />}
+                            {mapLayer === "streets" && <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}" />}
 
                             <Rectangle bounds={DATASET_BOUNDS} pathOptions={{ color: "#3b82f6", weight: 2, fill: false, dashArray: "5, 10" }} />
 
