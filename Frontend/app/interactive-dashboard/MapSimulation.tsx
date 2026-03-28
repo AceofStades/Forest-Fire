@@ -152,6 +152,87 @@ export default function MapSimulation() {
         }
 
         try {
+            const apiKey = process.env.NEXT_PUBLIC_ORS_API_KEY;
+
+            if (apiKey && apiKey.length > 10) {
+                // OPENROUTESERVICE VECTOR ROUTING
+                const startLatLng = rowColToLatLng(startTuple[0], startTuple[1]);
+                const goalLatLng = rowColToLatLng(goalTuple[0], goalTuple[1]);
+
+                // Cluster fires into 5x5 blocks to prevent overloading ORS with thousands of polygons
+                const blockSize = 5;
+                const blocks = new Map<string, {minR: number, maxR: number, minC: number, maxC: number}>();
+                
+                for(const [r, c] of activeFires) {
+                    const br = Math.floor(r / blockSize);
+                    const bc = Math.floor(c / blockSize);
+                    const key = `${br},${bc}`;
+                    if (!blocks.has(key)) {
+                        blocks.set(key, {minR: r, maxR: r, minC: c, maxC: c});
+                    } else {
+                        const b = blocks.get(key)!;
+                        b.minR = Math.min(b.minR, r);
+                        b.maxR = Math.max(b.maxR, r);
+                        b.minC = Math.min(b.minC, c);
+                        b.maxC = Math.max(b.maxC, c);
+                    }
+                }
+
+                const polygons = Array.from(blocks.values()).map(b => {
+                    const p1 = rowColToLatLng(Math.max(0, b.minR - 1), Math.max(0, b.minC - 1)); // Top-Left
+                    const p2 = rowColToLatLng(Math.max(0, b.minR - 1), Math.min(COLS - 1, b.maxC + 1)); // Top-Right
+                    const p3 = rowColToLatLng(Math.min(ROWS - 1, b.maxR + 1), Math.min(COLS - 1, b.maxC + 1)); // Bottom-Right
+                    const p4 = rowColToLatLng(Math.min(ROWS - 1, b.maxR + 1), Math.max(0, b.minC - 1)); // Bottom-Left
+                    
+                    // ORS expects [lon, lat] format for GeoJSON
+                    return [[
+                        [p1[1], p1[0]],
+                        [p2[1], p2[0]],
+                        [p3[1], p3[0]],
+                        [p4[1], p4[0]],
+                        [p1[1], p1[0]] // Close the loop
+                    ]];
+                });
+
+                const requestBody: any = {
+                    coordinates: [
+                        [startLatLng[1], startLatLng[0]], // Start [lon, lat]
+                        [goalLatLng[1], goalLatLng[0]]    // Goal [lon, lat]
+                    ],
+                };
+
+                if (polygons.length > 0) {
+                    requestBody.options = {
+                        avoid_polygons: {
+                            coordinates: polygons,
+                            type: "MultiPolygon"
+                        }
+                    };
+                }
+
+                const res = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
+                    method: "POST",
+                    headers: {
+                        "Authorization": apiKey,
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const data = await res.json();
+                
+                if (data.features && data.features.length > 0) {
+                    const coords = data.features[0].geometry.coordinates;
+                    const latLngPath = coords.map((c: number[]) => [c[1], c[0]] as [number, number]);
+                    setSafePath(latLngPath);
+                    setIsCalculatingPath(false);
+                    return; // Exit successfully
+                } else {
+                    console.warn("ORS routing failed or no path found, falling back to D* Lite...", data);
+                }
+            }
+
+            // FALLBACK TO BACKEND D* LITE
             const response = await fetch("http://127.0.0.1:8000/get-safe-path", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
