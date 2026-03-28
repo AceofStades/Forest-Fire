@@ -6,12 +6,14 @@ import {
     ImageOverlay,
     useMapEvents,
     Rectangle,
+    Polyline,
+    CircleMarker
 } from "react-leaflet";
 import { Navigation } from "@/components/navigation";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
-
+import { Flame, MapPin, Flag, Route, Trash2, ShieldAlert, Play, Pause, FastForward } from "lucide-react";
 
 interface EventData {
     probGrid: number[][];
@@ -20,61 +22,55 @@ interface EventData {
     bounds: [[number, number], [number, number]];
 }
 
-// Separate component to handle map right-clicks and interactions
+// Coordinate mapping constants
+const MIN_LAT = 28.71806;
+const MAX_LAT = 31.49096;
+const MIN_LON = 77.50902;
+const MAX_LON = 81.08195;
+
+const rowColToLatLng = (row: number, col: number): [number, number] => {
+    const lat = MAX_LAT - (row / 320) * (MAX_LAT - MIN_LAT);
+    const lng = MIN_LON + (col / 400) * (MAX_LON - MIN_LON);
+    return [lat, lng];
+};
+
 function MapClickHandler({
     onMapClick,
 }: {
-    onMapClick: (row: number, col: number) => void;
+    onMapClick: (row: number, col: number, eType: 'click' | 'contextmenu') => void;
 }) {
     useMapEvents({
-        contextmenu(e) {
-            // Uses right-click to avoid interfering with map panning
+        click(e) {
             const lat = e.latlng.lat;
             const lng = e.latlng.lng;
-
-            const minLat = 28.71806;
-            const maxLat = 31.49096;
-            const minLon = 77.50902;
-            const maxLon = 81.08195;
-
-            // Map standard: index [0,0] is top-left (maxLat, minLon)
-            const row = Math.floor(
-                (1 - (lat - minLat) / (maxLat - minLat)) * 320,
-            );
-            const col = Math.floor(((lng - minLon) / (maxLon - minLon)) * 400);
+            const row = Math.floor((1 - (lat - MIN_LAT) / (MAX_LAT - MIN_LAT)) * 320);
+            const col = Math.floor(((lng - MIN_LON) / (MAX_LON - MIN_LON)) * 400);
 
             if (row >= 0 && row < 320 && col >= 0 && col < 400) {
-                onMapClick(row, col);
+                onMapClick(row, col, 'click');
+            }
+        },
+        contextmenu(e) {
+            const lat = e.latlng.lat;
+            const lng = e.latlng.lng;
+            const row = Math.floor((1 - (lat - MIN_LAT) / (MAX_LAT - MIN_LAT)) * 320);
+            const col = Math.floor(((lng - MIN_LON) / (MAX_LON - MIN_LON)) * 400);
+
+            if (row >= 0 && row < 320 && col >= 0 && col < 400) {
+                onMapClick(row, col, 'contextmenu');
             }
         },
     });
     return null;
 }
 
-const WindOverlay = ({
-    speed,
-    direction,
-    isSandbox,
-}: {
-    speed: number;
-    direction: number;
-    isSandbox: boolean;
-}) => {
+const WindOverlay = ({ speed, direction, isSandbox }: { speed: number; direction: number; isSandbox: boolean; }) => {
     if (!isSandbox || speed === 0) return null;
-
-    // Slower, more gentle movement
     const duration = Math.max(1.5, 8 - speed / 15);
-
     return (
         <div className="absolute inset-0 pointer-events-none z-[400] overflow-hidden opacity-20 flex items-center justify-center mix-blend-screen">
-            <div
-                className="w-[200%] h-[200%] absolute"
-                style={{ transform: `rotate(${direction}deg)` }}
-            >
-                <div
-                    className="w-full h-full"
-                    style={{
-                        // Wider spacing, curved paths for wave effect
+            <div className="w-[200%] h-[200%] absolute" style={{ transform: `rotate(${direction}deg)` }}>
+                <div className="w-full h-full" style={{
                         backgroundImage: `url("data:image/svg+xml,%3Csvg width='200' height='300' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M 100 300 Q 120 250, 100 200 T 100 100 M 40 150 Q 60 100, 40 50' stroke='rgba(255,255,255,0.4)' stroke-width='1.5' fill='none' stroke-linecap='round' /%3E%3C/svg%3E")`,
                         backgroundSize: "200px 300px",
                         animation: `windWave ${duration}s ease-in-out infinite`,
@@ -98,23 +94,26 @@ export default function MapSimulation() {
     const [eventData, setEventData] = useState<EventData | null>(null);
     const [timeStep, setTimeStep] = useState<number>(0);
     const [isPlaying, setIsPlaying] = useState<boolean>(false);
-    const [viewMode, setViewMode] = useState<
-        "predicted" | "actual" | "compare"
-    >("predicted");
+    const [viewMode, setViewMode] = useState<"predicted" | "actual" | "compare">("predicted");
 
-    // Environmental Controls for Sandbox
+    // UI State
+    const [interactionMode, setInteractionMode] = useState<"ignite" | "start" | "goal">("ignite");
+
+    // D* Lite Pathfinding State
+    const [evacStart, setEvacStart] = useState<[number, number] | null>(null);
+    const [evacGoal, setEvacGoal] = useState<[number, number] | null>(null);
+    const [safePath, setSafePath] = useState<[number, number][]>([]);
+    const [isCalculatingPath, setIsCalculatingPath] = useState(false);
+
+    // Sandbox Settings
     const [windSpeed, setWindSpeed] = useState<number>(10);
     const [windDir, setWindDir] = useState<number>(90);
     const [isSandbox, setIsSandbox] = useState<boolean>(false);
-
     const [humidity, setHumidity] = useState<number>(25);
-    const [ignitionThreshold, setIgnitionThreshold] = useState<number>(0.6);
+    const [ignitionThreshold, setIgnitionThreshold] = useState<number>(0.3);
     const [mapLayer, setMapLayer] = useState<"dark" | "satellite" | "terrain">("dark");
-
-
     const [imageUrl, setImageUrl] = useState<string>("");
 
-    // CA State Reference
     const ROWS = 320;
     const COLS = 400;
     const stateGrid = useRef(new Uint8Array(ROWS * COLS));
@@ -122,8 +121,8 @@ export default function MapSimulation() {
     const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
     const DATASET_BOUNDS: [[number, number], [number, number]] = [
-        [28.71806, 77.50902],
-        [31.49096, 81.08195],
+        [MIN_LAT, MIN_LON],
+        [MAX_LAT, MAX_LON],
     ];
 
     useEffect(() => {
@@ -138,15 +137,44 @@ export default function MapSimulation() {
         offscreenCanvasRef.current = cvs;
     }, []);
 
+    const calculateSafePath = async (startTuple: [number, number], goalTuple: [number, number]) => {
+        if (!eventData) return;
+        setIsCalculatingPath(true);
+        try {
+            const response = await fetch("http://127.0.0.1:8000/get-safe-path", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ start: startTuple, goal: goalTuple }),
+            });
+            const data = await response.json();
+            if (data.path) {
+                // Convert row/col to lat/lng for Polyline
+                const latLngPath = data.path.map((coord: [number, number]) => rowColToLatLng(coord[0], coord[1]));
+                setSafePath(latLngPath);
+            }
+        } catch (error) {
+            console.error("Pathfinding error:", error);
+        } finally {
+            setIsCalculatingPath(false);
+        }
+    };
+
+    // Auto trigger path calculation when both points are set
+    useEffect(() => {
+        if (evacStart && evacGoal) {
+            calculateSafePath(evacStart, evacGoal);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [evacStart, evacGoal]);
+
     const loadEvent = async (id: number) => {
         setSelectedEventId(id);
         setIsPlaying(false);
         setTimeStep(0);
         setIsSandbox(false);
+        clearPath();
         try {
-            const res = await fetch(
-                `http://127.0.0.1:8000/event-data/${id}?hours=30`,
-            );
+            const res = await fetch(`http://127.0.0.1:8000/event-data/${id}?hours=30`);
             const data: EventData = await res.json();
             setEventData(data);
 
@@ -155,7 +183,6 @@ export default function MapSimulation() {
                 stateGrid.current[r * COLS + c] = 1;
             });
             stateHistory.current = [new Uint8Array(stateGrid.current)];
-
             renderCanvas(data);
         } catch (err) {
             console.error(err);
@@ -167,6 +194,7 @@ export default function MapSimulation() {
         setIsPlaying(false);
         setTimeStep(0);
         setEventData(null);
+        clearPath();
         stateGrid.current.fill(0);
         stateHistory.current = [new Uint8Array(stateGrid.current)];
 
@@ -185,23 +213,37 @@ export default function MapSimulation() {
             .catch((err) => console.error("Error fetching fire grid", err));
     };
 
-    const handleMapClick = (r: number, c: number) => {
-        if (!isSandbox || !eventData) return;
-        stateGrid.current[r * COLS + c] = 1;
-        // If we click the map, we truncate future history
-        stateHistory.current = stateHistory.current.slice(0, timeStep + 1);
-        stateHistory.current[timeStep] = new Uint8Array(stateGrid.current);
-        renderCanvas(eventData);
+    const handleMapClick = (r: number, c: number, eType: 'click' | 'contextmenu') => {
+        if (!eventData) return;
+
+        // Right click always ignites fire (legacy support + quick action)
+        if (eType === 'contextmenu') {
+            if (!isSandbox) return;
+            stateGrid.current[r * COLS + c] = 1;
+            stateHistory.current = stateHistory.current.slice(0, timeStep + 1);
+            stateHistory.current[timeStep] = new Uint8Array(stateGrid.current);
+            renderCanvas(eventData);
+            return;
+        }
+
+        // Left click depends on interactionMode
+        if (interactionMode === 'ignite') {
+            if (!isSandbox) return;
+            stateGrid.current[r * COLS + c] = 1;
+            stateHistory.current = stateHistory.current.slice(0, timeStep + 1);
+            stateHistory.current[timeStep] = new Uint8Array(stateGrid.current);
+            renderCanvas(eventData);
+        } else if (interactionMode === 'start') {
+            setEvacStart([r, c]);
+        } else if (interactionMode === 'goal') {
+            setEvacGoal([r, c]);
+        }
     };
 
-    const handleScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const newStep = parseInt(e.target.value, 10);
-        if (stateHistory.current[newStep]) {
-            setIsPlaying(false);
-            setTimeStep(newStep);
-            stateGrid.current = new Uint8Array(stateHistory.current[newStep]);
-            renderCanvas(eventData!, newStep);
-        }
+    const clearPath = () => {
+        setEvacStart(null);
+        setEvacGoal(null);
+        setSafePath([]);
     };
 
     const runCAStep = () => {
@@ -217,7 +259,6 @@ export default function MapSimulation() {
                     let neighborR = -1;
                     let neighborC = -1;
 
-                    // Check 8-way neighbors
                     for (let dr = -1; dr <= 1; dr++) {
                         for (let dc = -1; dc <= 1; dc++) {
                             if (dr === 0 && dc === 0) continue;
@@ -236,40 +277,26 @@ export default function MapSimulation() {
                     }
 
                     if (hasNeighbor) {
-                        let prob =
-                            (probGrid && probGrid[r] && probGrid[r][c]) !==
-                            undefined
-                                ? probGrid[r][c]
-                                : 0.05;
+                        let prob = (probGrid && probGrid[r] && probGrid[r][c]) !== undefined ? probGrid[r][c] : 0.05;
 
                         if (isSandbox) {
-                            // Apply advanced physics parameters
-                            // 1. Base ML probability boosted for sandbox scale
                             prob = prob * 1.5;
-
-                            // 2. Humidity Factor: high humidity dampens spread significantly
-                            const hf = 1 - (humidity / 100) * 0.8; // e.g. 100% humidity leaves 20% prob
+                            const hf = 1 - (humidity / 100) * 0.8; 
                             prob *= hf;
 
-                            // 3. Smooth Wind Bias (Cosine-based curve)
                             const spreadVecR = r - neighborR;
                             const spreadVecC = c - neighborC;
-                            // atan2(y, x). Note: grid row is y downwards, col is x rightwards.
                             const angle = Math.atan2(spreadVecR, spreadVecC) * (180 / Math.PI);
                             let diff = Math.abs(((angle - windDir + 540) % 360) - 180);
-                            const windBias = Math.cos((diff * Math.PI) / 180); // -1 to 1
+                            const windBias = Math.cos((diff * Math.PI) / 180); 
                             
-                            // Exponential wind scaling for realism
                             const wf = 1 + windBias * (windSpeed / 20); 
-                            prob *= Math.max(0.1, wf); // Don't let it drop strictly to 0
+                            prob *= Math.max(0.1, wf);
 
-                            // 4. Ignition Threshold Barrier
-                            // If base probability is below the strict threshold, it requires a lucky roll to spark
                             if (prob < ignitionThreshold) {
-                                prob *= 0.1; // heavily penalize
+                                prob *= 0.1;
                             }
                         } else {
-                            // Historical mode: gentle base probability multiplier for realistic 24-hour spread
                             prob = prob * 1.5 + 0.01;
                         }
 
@@ -278,31 +305,25 @@ export default function MapSimulation() {
                         }
                     }
                 } else if (stateGrid.current[idx] === 1) {
-                    // Burn out logic: Since each step is a full 24 hours, fire should naturally exhaust its local fuel quickly.
-                    // 70% chance a pixel finishes burning and turns to ash (state 2) in a single day.
-                    if (Math.random() < 0.7) nextState[idx] = 2; // Burn out
+                    if (isSandbox) {
+                        if (Math.random() < 0.1) nextState[idx] = 2;
+                    } else {
+                        if (Math.random() < 0.7) nextState[idx] = 2;
+                    }
                 }
             }
         }
 
-        // If in historical mode, inject actual new satellite fires into the simulation so it can predict their subsequent spread
-        if (
-            !isSandbox &&
-            eventData.groundTruth &&
-            timeStep + 1 < eventData.groundTruth.length
-        ) {
+        if (!isSandbox && eventData.groundTruth && timeStep + 1 < eventData.groundTruth.length) {
             const actualFires = eventData.groundTruth[timeStep + 1];
             if (actualFires) {
                 actualFires.forEach(([r, c]) => {
-                    // Inject spontaneous/new real-world ignitions into the simulation
                     nextState[r * COLS + c] = 1;
                 });
             }
         }
 
         stateGrid.current = nextState;
-
-        // Truncate any future history if we generated a new branch, then add new state
         stateHistory.current = stateHistory.current.slice(0, timeStep + 1);
         stateHistory.current.push(new Uint8Array(nextState));
 
@@ -322,7 +343,6 @@ export default function MapSimulation() {
             }, 500);
         }
         return () => clearInterval(interval);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isPlaying, isSandbox, timeStep, eventData]);
 
     const renderCanvas = (data: EventData, currentTime: number = timeStep) => {
@@ -339,10 +359,7 @@ export default function MapSimulation() {
 
                 if (viewMode === "predicted" || viewMode === "compare") {
                     if (state === 1) {
-                        ctx.fillStyle =
-                            viewMode === "compare"
-                                ? "rgba(255, 0, 0, 0.6)"
-                                : "rgba(255, 69, 0, 0.8)";
+                        ctx.fillStyle = viewMode === "compare" ? "rgba(255, 0, 0, 0.6)" : "rgba(255, 69, 0, 0.8)";
                         ctx.fillRect(c, r, 1, 1);
                     } else if (state === 2) {
                         ctx.fillStyle = "rgba(80, 80, 80, 0.5)";
@@ -353,22 +370,18 @@ export default function MapSimulation() {
         }
 
         if (!isSandbox && (viewMode === "actual" || viewMode === "compare")) {
-            const actualTime = Math.min(
-                currentTime,
-                data.groundTruth.length - 1,
-            );
+            const actualTime = Math.min(currentTime, data.groundTruth.length - 1);
             if (data.groundTruth[actualTime]) {
                 data.groundTruth[actualTime].forEach(([r, c]) => {
                     if (viewMode === "compare") {
-                        const isPredicted =
-                            stateGrid.current[r * COLS + c] === 1;
+                        const isPredicted = stateGrid.current[r * COLS + c] === 1;
                         if (isPredicted) {
-                            ctx.fillStyle = "rgba(128, 0, 128, 0.8)"; // Purple for overlap
+                            ctx.fillStyle = "rgba(128, 0, 128, 0.8)";
                         } else {
-                            ctx.fillStyle = "rgba(0, 255, 0, 0.6)"; // Green for actual only
+                            ctx.fillStyle = "rgba(0, 255, 0, 0.6)";
                         }
                     } else {
-                        ctx.fillStyle = "rgba(255, 0, 0, 0.8)"; // Red for actual mode
+                        ctx.fillStyle = "rgba(255, 0, 0, 0.8)";
                     }
                     ctx.fillRect(c, r, 1, 1);
                 });
@@ -380,81 +393,71 @@ export default function MapSimulation() {
 
     useEffect(() => {
         if (eventData) renderCanvas(eventData, timeStep);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [viewMode, eventData]);
 
     return (
         <div className="flex flex-col min-h-screen bg-slate-950 text-white">
             <Navigation />
             <div className="flex flex-1 overflow-hidden">
-                {/* Sidebar */}
-                <div className="w-80 bg-slate-900 border-r border-slate-800 p-6 flex flex-col gap-6 overflow-y-auto">
-                    <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-orange-400 to-red-500">
-                        Fire Dynamics Engine
+                {/* Left Sidebar */}
+                <div className="w-80 bg-slate-900 border-r border-slate-800 p-6 flex flex-col gap-6 overflow-y-auto relative z-20 shadow-2xl">
+                    <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-orange-400 to-red-500 flex items-center gap-2">
+                        <Flame className="w-5 h-5 text-orange-500" /> Fire Dynamics
                     </h2>
 
-                    <Tabs defaultValue="historical" className="w-full" onValueChange={(v) => {
-                        if (v === "sandbox") enableSandbox();
-                        // if historical, maybe clear sandbox but we wait for event click
-                    }}>
-                        <TabsList className="grid w-full grid-cols-2 bg-slate-800 text-slate-400 mb-4">
-                            <TabsTrigger value="historical" className="data-[state=active]:bg-slate-700 data-[state=active]:text-white">Historical</TabsTrigger>
-                            <TabsTrigger value="sandbox" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white">Sandbox</TabsTrigger>
+                    <Tabs defaultValue="historical" className="w-full" onValueChange={(v) => { if (v === "sandbox") enableSandbox(); }}>
+                        <TabsList className="grid w-full grid-cols-2 bg-slate-800 text-slate-400 mb-4 p-1 rounded-lg">
+                            <TabsTrigger value="historical" className="rounded-md data-[state=active]:bg-slate-700 data-[state=active]:text-white">Historical</TabsTrigger>
+                            <TabsTrigger value="sandbox" className="rounded-md data-[state=active]:bg-blue-600 data-[state=active]:text-white">Sandbox</TabsTrigger>
                         </TabsList>
 
                         <TabsContent value="historical" className="space-y-3">
-                            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                                Event Analysis
-                            </h3>
-                            {events.map((ev) => (
-                                <Button
-                                    key={ev.id}
-                                    variant={
-                                        selectedEventId === ev.id && !isSandbox
-                                            ? "default"
-                                            : "outline"
-                                    }
-                                    className="w-full justify-start border-slate-700"
-                                    onClick={() => loadEvent(ev.id)}
-                                >
-                                    {ev.name}
-                                </Button>
-                            ))}
+                            <div className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                <Route className="w-4 h-4" /> Validated Events
+                            </div>
+                            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                                {events.map((ev) => (
+                                    <Button
+                                        key={ev.id}
+                                        variant={selectedEventId === ev.id && !isSandbox ? "default" : "outline"}
+                                        className={`w-full justify-start ${selectedEventId === ev.id && !isSandbox ? 'bg-orange-600 hover:bg-orange-700 border-none' : 'border-slate-700 hover:bg-slate-800'}`}
+                                        onClick={() => loadEvent(ev.id)}
+                                    >
+                                        {ev.name}
+                                    </Button>
+                                ))}
+                            </div>
                         </TabsContent>
 
                         <TabsContent value="sandbox" className="space-y-4">
-                            <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700 space-y-4 text-sm">
-                                <p className="text-slate-300 mb-2 font-semibold text-blue-400">
-                                    Right-Click on the map to ignite a fire.
-                                </p>
-
+                            <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700 space-y-5 text-sm">
                                 <div className="space-y-2">
-                                    <div className="flex justify-between">
-                                        <span>Wind Speed</span>
+                                    <div className="flex justify-between font-medium">
+                                        <span className="text-slate-300">Wind Speed</span>
                                         <span className="text-orange-400">{windSpeed} km/h</span>
                                     </div>
                                     <input type="range" min="0" max="100" value={windSpeed} onChange={(e) => setWindSpeed(Number(e.target.value))} className="w-full accent-orange-500" />
                                 </div>
 
-                                <div className="space-y-2 pt-2">
-                                    <div className="flex justify-between">
-                                        <span>Wind Direction</span>
+                                <div className="space-y-2">
+                                    <div className="flex justify-between font-medium">
+                                        <span className="text-slate-300">Wind Direction</span>
                                         <span className="text-blue-400">{windDir}°</span>
                                     </div>
                                     <input type="range" min="0" max="360" value={windDir} onChange={(e) => setWindDir(Number(e.target.value))} className="w-full accent-blue-500" />
                                 </div>
 
-                                <div className="space-y-2 pt-2">
-                                    <div className="flex justify-between">
-                                        <span>Humidity</span>
+                                <div className="space-y-2">
+                                    <div className="flex justify-between font-medium">
+                                        <span className="text-slate-300">Humidity</span>
                                         <span className="text-teal-400">{humidity}%</span>
                                     </div>
                                     <input type="range" min="0" max="100" value={humidity} onChange={(e) => setHumidity(Number(e.target.value))} className="w-full accent-teal-500" />
                                 </div>
 
-                                <div className="space-y-2 pt-2">
-                                    <div className="flex justify-between">
-                                        <span>Ignition Threshold</span>
+                                <div className="space-y-2">
+                                    <div className="flex justify-between font-medium">
+                                        <span className="text-slate-300">Ignition Threshold</span>
                                         <span className="text-red-400">{ignitionThreshold.toFixed(2)}</span>
                                     </div>
                                     <input type="range" min="0" max="1" step="0.05" value={ignitionThreshold} onChange={(e) => setIgnitionThreshold(Number(e.target.value))} className="w-full accent-red-500" />
@@ -463,223 +466,152 @@ export default function MapSimulation() {
                         </TabsContent>
                     </Tabs>
 
-                    <div className="mt-4 pt-4 border-t border-slate-800">
-                        <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">
-                            Map Layers
-                        </h3>
-                        <div className="flex flex-col gap-2">
-                            <Button variant={mapLayer === "dark" ? "secondary" : "ghost"} onClick={() => setMapLayer("dark")} className="justify-start text-xs h-8">
-                                <div className="w-3 h-3 bg-slate-800 rounded-full mr-2 border border-slate-600"></div>
-                                Dark Matter (Default)
-                            </Button>
-                            <Button variant={mapLayer === "satellite" ? "secondary" : "ghost"} onClick={() => setMapLayer("satellite")} className="justify-start text-xs h-8">
-                                <div className="w-3 h-3 bg-green-700 rounded-full mr-2 border border-green-500"></div>
-                                Satellite Vegetation
-                            </Button>
-                            <Button variant={mapLayer === "terrain" ? "secondary" : "ghost"} onClick={() => setMapLayer("terrain")} className="justify-start text-xs h-8">
-                                <div className="w-3 h-3 bg-amber-700 rounded-full mr-2 border border-amber-500"></div>
-                                Topography & Terrain
-                            </Button>
+                    <div className="mt-auto space-y-4">
+                        <div className="pt-4 border-t border-slate-800">
+                            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Map Topology</h3>
+                            <div className="grid grid-cols-3 gap-2">
+                                <Button variant={mapLayer === "dark" ? "secondary" : "outline"} onClick={() => setMapLayer("dark")} className="h-10 text-xs bg-slate-800 border-slate-700">Dark</Button>
+                                <Button variant={mapLayer === "satellite" ? "secondary" : "outline"} onClick={() => setMapLayer("satellite")} className="h-10 text-xs bg-slate-800 border-slate-700">Sat</Button>
+                                <Button variant={mapLayer === "terrain" ? "secondary" : "outline"} onClick={() => setMapLayer("terrain")} className="h-10 text-xs bg-slate-800 border-slate-700">Terr</Button>
+                            </div>
                         </div>
-                    </div>
 
-
-                    {/* Controls */}
-                    {eventData && (
-                        <div className="mt-auto space-y-4 bg-slate-900 border-t border-slate-800 pt-6">
-                            <div className="flex justify-between items-center text-sm">
-                                <span className="text-slate-400">
-                                    Simulation Time:
-                                </span>
-                                <span className="font-mono text-orange-400 font-bold">
-                                    T + {timeStep} Days
-                                </span>
-                            </div>
-
-                            <input
-                                type="range"
-                                min="0"
-                                max={
-                                    stateHistory.current.length > 0
-                                        ? stateHistory.current.length - 1
-                                        : 0
-                                }
-                                value={timeStep}
-                                onChange={handleScrub}
-                                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
-                            />
-
-                            <div className="grid grid-cols-2 gap-2">
-                                <Button
-                                    onClick={() => setIsPlaying(!isPlaying)}
-                                    className={
-                                        isPlaying
-                                            ? "bg-red-600 hover:bg-red-700 text-white"
-                                            : "bg-emerald-600 hover:bg-emerald-700 text-white"
-                                    }
-                                >
-                                    {isPlaying ? "Pause" : "Play Run"}
-                                </Button>
-                                <Button
-                                    variant="secondary"
-                                    onClick={runCAStep}
-                                    disabled={isPlaying}
-                                >
-                                    Step +1 Day
-                                </Button>
-                            </div>
-
-                            {!isSandbox && (
-                                <div className="space-y-2 pt-4">
-                                    <span className="text-xs font-semibold text-slate-500 uppercase">
-                                        View Mode
-                                    </span>
-                                    <div className="flex bg-slate-800 rounded-md p-1">
-                                        {(
-                                            [
-                                                "predicted",
-                                                "actual",
-                                                "compare",
-                                            ] as const
-                                        ).map((mode) => (
-                                            <button
-                                                key={mode}
-                                                onClick={() =>
-                                                    setViewMode(mode)
-                                                }
-                                                className={`flex-1 text-xs py-1.5 rounded capitalize transition-all ${viewMode === mode ? "bg-slate-700 text-white shadow-sm" : "text-slate-400 hover:text-white"}`}
-                                            >
-                                                {mode}
-                                            </button>
-                                        ))}
-                                    </div>
-                                    {viewMode === "compare" && (
-                                        <div className="text-xs pt-2 flex justify-between px-2">
-                                            <span className="flex items-center gap-1">
-                                                <div className="w-2 h-2 bg-red-500 rounded-full"></div>{" "}
-                                                Predicted
-                                            </span>
-                                            <span className="flex items-center gap-1">
-                                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>{" "}
-                                                Actual
-                                            </span>
-                                        </div>
-                                    )}
+                        {!isSandbox && (
+                            <div className="space-y-2 pt-2">
+                                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Analysis Mode</span>
+                                <div className="flex bg-slate-800 rounded-md p-1">
+                                    {(["predicted", "actual", "compare"] as const).map((mode) => (
+                                        <button key={mode} onClick={() => setViewMode(mode)} className={`flex-1 text-xs py-1.5 rounded capitalize transition-all ${viewMode === mode ? "bg-slate-700 text-white shadow-sm" : "text-slate-400 hover:text-white"}`}>{mode}</button>
+                                    ))}
                                 </div>
-                            )}
-                        </div>
-                    )}
+                            </div>
+                        )}
+                    </div>
                 </div>
 
-                {/* Map Area */}
-                <div className="flex-1 relative bg-slate-950 overflow-hidden">
-                    {/* Compass / Wind Overlay */}
-                    {isSandbox && windSpeed > 0 && (
-                        <div className="absolute top-6 right-6 z-[400] w-28 h-28 bg-slate-900/80 rounded-full border border-slate-700 flex items-center justify-center pointer-events-none shadow-lg backdrop-blur-sm">
-                            <div
-                                className="absolute w-1 h-20 bg-gradient-to-t from-transparent via-blue-500/50 to-blue-400 rounded-full flex flex-col items-center"
-                                style={{
-                                    transform: `rotate(${windDir}deg)`,
-                                    transition: "transform 0.3s ease-out",
-                                }}
+                {/* Main Map Area */}
+                <div className="flex-1 relative bg-slate-950 overflow-hidden flex flex-col">
+                    
+                    {/* Top Toolbar (Floating inside Map) */}
+                    <div className="absolute top-4 left-4 z-[500] flex gap-2">
+                        {isSandbox && (
+                            <div className="flex bg-slate-900/90 backdrop-blur-md border border-slate-700 rounded-lg p-1 shadow-xl">
+                                <Button 
+                                    variant={interactionMode === 'ignite' ? 'default' : 'ghost'} 
+                                    size="sm" 
+                                    onClick={() => setInteractionMode('ignite')}
+                                    className={interactionMode === 'ignite' ? 'bg-orange-600 hover:bg-orange-700' : 'text-slate-400 hover:text-orange-400'}
+                                    title="Ignite Fire (Left Click)"
+                                >
+                                    <Flame className="w-4 h-4 mr-1" /> Ignite
+                                </Button>
+                            </div>
+                        )}
+
+                        <div className="flex bg-slate-900/90 backdrop-blur-md border border-slate-700 rounded-lg p-1 shadow-xl">
+                            <Button 
+                                variant={interactionMode === 'start' ? 'secondary' : 'ghost'} 
+                                size="sm" 
+                                onClick={() => setInteractionMode('start')}
+                                className={interactionMode === 'start' ? 'bg-emerald-900/50 text-emerald-400 hover:bg-emerald-900/70' : 'text-slate-400 hover:text-emerald-400'}
                             >
-                                {/* Arrowhead */}
-                                <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[10px] border-b-blue-400 -mt-2"></div>
-                            </div>
-                            <div className="absolute text-xs text-blue-300 font-bold bg-slate-900/60 px-2 py-0.5 rounded-full backdrop-blur-md">
-                                {windSpeed} km/h
-                            </div>
+                                <MapPin className="w-4 h-4 mr-1" /> Set Evac Start
+                            </Button>
+                            <Button 
+                                variant={interactionMode === 'goal' ? 'secondary' : 'ghost'} 
+                                size="sm" 
+                                onClick={() => setInteractionMode('goal')}
+                                className={interactionMode === 'goal' ? 'bg-blue-900/50 text-blue-400 hover:bg-blue-900/70' : 'text-slate-400 hover:text-blue-400'}
+                            >
+                                <Flag className="w-4 h-4 mr-1" /> Set Evac Goal
+                            </Button>
+                            
+                            {(evacStart || evacGoal || safePath.length > 0) && (
+                                <div className="w-px bg-slate-700 mx-1 my-1"></div>
+                            )}
+                            {(evacStart || evacGoal || safePath.length > 0) && (
+                                <Button variant="ghost" size="sm" onClick={clearPath} className="text-red-400 hover:text-red-300 hover:bg-red-950/50" title="Clear Path">
+                                    <Trash2 className="w-4 h-4" />
+                                </Button>
+                            )}
                         </div>
-                    )}
-
-                    <MapContainer
-                        center={[30.1, 79.2]}
-                        zoom={8}
-                        style={{
-                            height: "100%",
-                            width: "100%",
-                            background: "#0f172a",
-                        }}
-                    >
-                        {mapLayer === "dark" && (
-                            <TileLayer
-                                url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-                                attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-                            />
-                        )}
-                        {mapLayer === "satellite" && (
-                            <TileLayer
-                                url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                                attribution="Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community"
-                            />
-                        )}
-                        {mapLayer === "terrain" && (
-                            <TileLayer
-                                url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}"
-                                attribution="Tiles &copy; Esri &mdash; Source: USGS, Esri, TANA, DeLorme, and NPS"
-                            />
-                        )}
-
-                        {/* Model Bounds Box */}
-                        <Rectangle
-                            bounds={DATASET_BOUNDS}
-                            pathOptions={{
-                                color: "#3b82f6",
-                                weight: 2,
-                                fill: false,
-                                dashArray: "5, 10",
-                            }}
-                        />
-
-                        {eventData && imageUrl && (
-                            <ImageOverlay
-                                url={imageUrl}
-                                bounds={eventData.bounds}
-                                opacity={1.0}
-                                zIndex={10}
-                            />
-                        )}
-
-                        {/* Invisible layer to capture clicks */}
-                        <MapClickHandler onMapClick={handleMapClick} />
-                    </MapContainer>
-
-                    {/* Wind particles overlay placed AFTER MapContainer to be on top */}
-                    <WindOverlay
-                        speed={windSpeed}
-                        direction={windDir}
-                        isSandbox={isSandbox}
-                    />
-
-                    {/* Current Conditions Overlay */}
-                    <div className="absolute top-4 right-4 z-[500] bg-slate-900/90 backdrop-blur border border-slate-700 p-4 rounded-lg shadow-xl w-64">
-                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Live Environment</h4>
-                        <div className="space-y-3">
-                            <div className="flex justify-between items-center text-sm">
-                                <span className="text-slate-300">Map Mode</span>
-                                <span className="font-medium text-blue-400 capitalize">{mapLayer}</span>
+                        
+                        {isCalculatingPath && (
+                            <div className="flex items-center px-3 bg-slate-900/90 backdrop-blur-md border border-indigo-500/50 rounded-lg text-indigo-400 text-sm font-medium animate-pulse">
+                                <Route className="w-4 h-4 mr-2" /> D* Lite Routing...
                             </div>
-                            <div className="flex justify-between items-center text-sm">
-                                <span className="text-slate-300">Humidity</span>
-                                <span className="font-medium text-teal-400">{isSandbox ? humidity : 45}%</span>
+                        )}
+                    </div>
+
+                    <div className="flex-1 relative z-0">
+                        <MapContainer center={[30.1, 79.2]} zoom={8} style={{ height: "100%", width: "100%", background: "#0f172a" }}>
+                            {mapLayer === "dark" && <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />}
+                            {mapLayer === "satellite" && <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" />}
+                            {mapLayer === "terrain" && <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}" />}
+
+                            <Rectangle bounds={DATASET_BOUNDS} pathOptions={{ color: "#3b82f6", weight: 2, fill: false, dashArray: "5, 10" }} />
+
+                            {eventData && imageUrl && <ImageOverlay url={imageUrl} bounds={eventData.bounds} opacity={1.0} zIndex={10} />}
+
+                            {/* D* Lite Overlays */}
+                            {safePath.length > 0 && (
+                                <Polyline positions={safePath} pathOptions={{ color: '#10b981', weight: 4, dashArray: '10, 10', lineCap: 'round' }} />
+                            )}
+                            {evacStart && (
+                                <CircleMarker center={rowColToLatLng(evacStart[0], evacStart[1])} radius={6} pathOptions={{ color: '#10b981', fillColor: '#10b981', fillOpacity: 1, weight: 2 }} />
+                            )}
+                            {evacGoal && (
+                                <CircleMarker center={rowColToLatLng(evacGoal[0], evacGoal[1])} radius={6} pathOptions={{ color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 1, weight: 2 }} />
+                            )}
+
+                            <MapClickHandler onMapClick={handleMapClick} />
+                        </MapContainer>
+                        <WindOverlay speed={windSpeed} direction={windDir} isSandbox={isSandbox} />
+                    </div>
+
+                    {/* Bottom Playback Bar */}
+                    {eventData && (
+                        <div className="h-20 bg-slate-900 border-t border-slate-800 z-20 flex items-center px-6 gap-6 shadow-[0_-10px_40px_-10px_rgba(0,0,0,0.5)]">
+                            <div className="flex gap-2">
+                                <Button onClick={() => setIsPlaying(!isPlaying)} size="icon" className={`h-12 w-12 rounded-full ${isPlaying ? "bg-red-600 hover:bg-red-700 text-white" : "bg-emerald-600 hover:bg-emerald-700 text-white"}`}>
+                                    {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-1" />}
+                                </Button>
+                                <Button variant="outline" size="icon" onClick={runCAStep} disabled={isPlaying} className="h-12 w-12 rounded-full border-slate-700 bg-slate-800 hover:bg-slate-700">
+                                    <FastForward className="w-5 h-5 text-slate-300" />
+                                </Button>
                             </div>
-                            <div className="flex justify-between items-center text-sm">
-                                <span className="text-slate-300">Wind</span>
-                                <span className="font-medium text-orange-400">{isSandbox ? windSpeed : 12} km/h</span>
+
+                            <div className="flex-1 flex items-center gap-4">
+                                <div className="text-slate-400 font-mono text-sm w-20">T + {timeStep}D</div>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max={stateHistory.current.length > 0 ? stateHistory.current.length - 1 : 0}
+                                    value={timeStep}
+                                    onChange={(e) => {
+                                        const newStep = parseInt(e.target.value, 10);
+                                        if (stateHistory.current[newStep]) {
+                                            setIsPlaying(false);
+                                            setTimeStep(newStep);
+                                            stateGrid.current = new Uint8Array(stateHistory.current[newStep]);
+                                            renderCanvas(eventData, newStep);
+                                        }
+                                    }}
+                                    className="flex-1 h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-orange-500 hover:h-3 transition-all"
+                                />
                             </div>
-                            <div className="flex justify-between items-center text-sm">
-                                <span className="text-slate-300">Fire Danger</span>
-                                <div className={`px-2 py-0.5 rounded text-xs font-bold ${
-                                    isSandbox 
-                                        ? (humidity < 30 && windSpeed > 40 ? "bg-red-900/50 text-red-500" : "bg-orange-900/50 text-orange-500") 
-                                        : "bg-red-900/50 text-red-500"
-                                }`}>
-                                    {isSandbox ? (humidity < 30 && windSpeed > 40 ? "EXTREME" : "HIGH") : "HIGH"}
+
+                            <div className="flex items-center gap-3 w-48 border-l border-slate-800 pl-6">
+                                <ShieldAlert className={`w-5 h-5 ${isSandbox ? (humidity < 30 && windSpeed > 40 ? "text-red-500" : "text-orange-500") : "text-red-500"}`} />
+                                <div>
+                                    <div className="text-[10px] uppercase text-slate-500 font-bold">Fire Danger</div>
+                                    <div className={`text-sm font-bold ${isSandbox ? (humidity < 30 && windSpeed > 40 ? "text-red-500" : "text-orange-500") : "text-red-500"}`}>
+                                        {isSandbox ? (humidity < 30 && windSpeed > 40 ? "EXTREME" : "HIGH") : "HIGH"}
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-
+                    )}
                 </div>
             </div>
         </div>
