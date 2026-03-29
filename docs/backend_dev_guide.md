@@ -1,96 +1,50 @@
-# Backend Developer Guide: Model Integration and Inference
+# Backend Developer Guide: API, Pathfinding, and Physics Engines
 
-This guide explains how the machine learning model (U-Net) is integrated into the FastAPI backend, how to manage state, and how the inference pipeline feeds into both the 3D Cellular Automata simulation and the D* Lite pathfinding algorithm.
+This guide explains how the FastAPI backend integrates the machine learning models (PyTorch), pathfinding algorithms (D* Lite), and the realtime physical advection engines for the interactive sandboxes.
 
-## 1. Directory Structure
+## 1. Environment & Setup
 
-The backend server is located in the `Server/` directory.
+The backend server relies entirely on `uv` for modern, blazing-fast Python environment management. 
+- **Dependencies:** All dependencies are managed in the root `pyproject.toml` and `uv.lock`.
+- **Run the Server:**
+  ```bash
+  cd Server
+  uv run uvicorn app.main:app --reload --port 8000
+  ```
+
+## 2. Directory Structure
 
 ```bash
 Server/
 ├── app/
-│   ├── main.py           # FastAPI application and endpoints
-│   ├── d_star_lite.py    # Pathfinding algorithm implementation
-│   ├── model_wrapper.py  # Utility for loading ML models (PyTorch)
-│   ├── schemas.py        # Pydantic schemas for request/response validation
-│   └── models/           # Directory for storing model weights (.pth) and artifacts (.pkl, .npy)
-├── requirements.txt      # Backend Python dependencies
-└── ...
+│   ├── main.py             # FastAPI entrypoint and HTTP endpoints
+│   ├── d_star_lite.py      # D* Lite algorithm implementation
+│   ├── model_wrapper.py    # Utility for loading PyTorch ML models
+│   ├── sandbox_engine.py   # PyTorch Tensor 2D Convolution physics engine
+│   ├── schemas.py          # Pydantic validation schemas
+│   └── models/             # Legacy directory for isolated weights
 ```
 
-## 2. Model State Management (Lifespan Hook)
+## 3. Core API Endpoints
 
-To ensure the API responds quickly without loading gigabytes of weights on every request, the model and its required artifacts are loaded into RAM exactly once during the server's startup phase using FastAPI's `@asynccontextmanager lifespan` hook.
+### A. Real-world Pathfinding (`POST /get-safe-path`)
+Used as a robust, offline-capable fallback when the primary OpenRouteService (ORS) street-routing API fails or the user is deep in off-road wilderness.
+1. The frontend sends the `start` tuple, `goal` tuple, and an array of `active_fires`.
+2. The backend fetches the pre-computed ML `fire_grid` probability matrix from memory.
+3. It iterates through the `active_fires` array and artificially injects `1.0` (maximum danger) into the grid at those coordinates.
+4. The `DStarLite` class computes the shortest path across the tensor from Goal to Start, safely skirting around the probability hotspots.
 
-### Required Artifacts in `Server/app/models/`
-Before running the server, ensure the following files (generated from the `Model/` training pipeline) are placed in the `Server/app/models/` directory:
+### B. Interactive Physics Sandbox (`POST /sandbox-step`)
+Drives the side-by-side architecture comparison on the `/ml-insights` page. 
+1. The frontend streams the 14,400 (120x120) state grid, topography (DEM), and user-selected wind/temperature parameters at 5 frames per second.
+2. The endpoint routes the data to `sandbox_engine.py`.
+3. **NDWS Mock (`run_ndws_step`):** Runs a naive radial expansion using standard convolution, simulating the "Identity Trap" where models ignore physics.
+4. **Custom Hybrid (`run_custom_hybrid_step`):** Converts the grids to PyTorch Tensors (`torch.tensor`). It uses `torch.nn.functional.conv2d` across 8 directional kernels to simultaneously calculate spread probabilities for the entire map. It applies rigorous dot-product mathematics to penalize upwind spread and exponentially boost downwind/uphill spread based on the DEM tensor.
 
-1.  **Model Weights:** The trained PyTorch model (`best_unet.pth`). *Note: We utilize the U-Net architecture trained as a Static Burn Susceptibility (Fuel) Model.*
-2.  **Dataset Statistics:** The `stats_cache.pkl` file. This contains the robust min/max values required to normalize incoming real-time weather/sensor data so it perfectly matches the scale the model was trained on.
+### C. Historical Event Data (`GET /event-data/{idx}`)
+Fetches multi-modal NetCDF arrays to project onto the Leaflet map.
+- Runs the `U-Net` model in real-time for a specific hourly index.
+- Returns `probGrid` (static ML susceptibility), `groundTruth` (actual satellite fire flashes), and geographical bounding coordinates (`[Lat, Lon]`) to correctly overlay the 320x400 matrices onto Esri street maps in the UI.
 
-## 3. The Cellular Automata Inference Pipeline
-
-The ML model does **not** predict the spread of the fire directly. To prevent "persistence bias", the model is trained to predict the inherent **Burn Susceptibility (Fuel Map)** of the environment based on static landscape and weather features. This allows the backend to provide the base transition probabilities for the frontend's Cellular Automata (CA) simulation.
-
-When the frontend requests data for a simulation, the backend follows this pipeline:
-
-### A. Input Payload (What to give the model)
-The endpoint constructs a 13-channel PyTorch tensor of shape `[1, 13, Height, Width]`. The model is *blind* to the current fire state.
-
-The 13 channels **must be strictly ordered** as follows:
-1.  `d2m`: 2m Dewpoint Temperature
-2.  `t2m`: 2m Temperature
-3.  `swvl1`: Volumetric Soil Water Layer 1
-4.  `e`: Evaporation
-5.  `u10`: 10m U-component of Wind
-6.  `v10`: 10m V-component of Wind
-7.  `tp`: Total Precipitation
-8.  `cvl`: Low Vegetation Cover
-9.  `Burn_Scar`: A historical memory channel (1 = burned in the past, 0 = unburned).
-10. `Water_Mask`: Engineered from LULC (1 = burnable, 0 = water/barren).
-11. `Urban_Mask`: Engineered from GHS_BUILT (1 = urban).
-12. `Slope_Y`: Topographical Y gradient.
-13. `Slope_X`: Topographical X gradient.
-
-### B. Normalization
-The incoming values are normalized using the loaded `ml_artifacts["stats"]`. 
-*   *Critical:* Binary channels bypass percentile scaling. They must be hardcoded to `[0, 1]`.
-
-### C. Forward Pass & Output (What to expect)
-1.  The `[1, 13, H, W]` tensor is passed through the `UNet`.
-2.  The model outputs raw logits which are passed through `torch.sigmoid()` to yield a probability map `[1, 1, H, W]`.
-3.  **This output is the Static Spread Probability (Fuel) Map.** It highlights topographical hotspots where the fire could potentially expand.
-
-### D. The Simulation Step
-The simulated Cellular Automaton logic occurs primarily in the Next.js React frontend. The frontend uses the ML's probability map, factors in the user's interactive wind speed and direction sliders, and mathematically steps the fire forward **day-by-day**. New satellite ignitions are continuously injected into the simulation grid from the raw dataset to maintain real-world accuracy.
-
-## 4. D* Lite Pathfinding Integration
-
-The `spread_probability_map` generated by the model is also fed directly into the `DStarLite` class to recalculate safe evacuation routes dynamically.
-
-- **The Grid:** The algorithm uses an 8-way connectivity grid matching the `H x W` dimensions.
-- **Cost Function:** The cost to move to an adjacent node $v$ is calculated as distance plus a massive penalty if the model predicts fire will spread there.
-  ```python
-  prob = spread_probability_map[v[0], v[1]]
-  cost = 1 + (prob * 1000 if prob > 0.6 else prob * 10)
-  ```
-
-## 5. API Endpoints
-
-In addition to serving the model for pathfinding, the backend exposes endpoints specifically designed to drive the Next.js `react-leaflet` simulation dashboard:
-
-- `GET /historical-events`: Returns an array of significant fire-spread indices (e.g., `[271, 559, ...]`) derived from the dataset for the user to explore.
-- `GET /event-data/{idx}`: Runs the UNet model for a specific historical hour index. It returns:
-  - `probGrid`: The predicted spread probabilities.
-  - `groundTruth`: A sparse array mapping of actual fire coordinates for the next 48 hours.
-  - `bounds`: The geographic bounding box `[[28.71806, 77.50902], [31.49096, 81.08195]]` used to perfectly project the PyTorch matrix onto real-world coordinates.
-- `POST /upload-data`: Accepts `.nc`, `.tiff`, or `.geojson` datasets from organizations or governments, processes them, and prepares them to be rendered by the ML Simulation Sandbox.
-
-## 6. Running the Server
-
-To start the development server locally using `uv`:
-
-```bash
-uv run uvicorn Server.app.main:app --host 0.0.0.0 --port 8000
-```
-The API will be available at `http://localhost:8000`.
+## 4. State Management (Lifespan Hook)
+To ensure the API responds instantly without loading gigabytes of weights on every request, the model (`best_unet.pth`) and required NetCDF dataset statistics (`stats_cache_fi.pkl`) are loaded into RAM exactly once during the server's startup phase using FastAPI's `@asynccontextmanager lifespan` hook in `main.py`. The `ml_artifacts` dictionary acts as a globally accessible state object for all active endpoints.

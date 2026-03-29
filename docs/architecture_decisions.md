@@ -1,29 +1,37 @@
-# Architecture & Design Decisions: The "Persistence Bias" Resolution
+# Architecture & Design Decisions
 
-This document tracks the crucial pivot made to resolve the "Identity Trap" (Persistence Bias) that caused the UNet and ConvLSTM models to falsely achieve 0.99 F1 scores without learning physical fire dynamics.
+This document tracks the crucial structural and architectural decisions made across the Forest-Fire monorepo.
 
-## 1. The Core Issue: The "Strobe Light" Effect & Identity Leak
+## 1. The Machine Learning Pivot: Overcoming the "Identity Trap"
+
+### The Core Issue: The "Strobe Light" Effect
 The raw dataset relies on MODIS satellite data, which only provides a snapshot of the fire 1-2 times per day. In our hourly dataset array, this meant the fire was entirely static for 23 hours a day, jumping abruptly once the satellite passed over.
+*   **The Initial Failure:** When we asked the U-Net to predict the fire state at T+1 while passing the current fire map (`MODIS_FIRE_T1`) as an input channel, the model learned an "Identity Function." Because T and T+1 overlap by >99.9%, it simply copied the input fire channel directly to the output. It ignored wind, slope, and temperature entirely, instantly achieving a fake 0.99 F1 score while fundamentally failing to learn any physics.
 
-*   **Attempt 1 (Synthetic Hourly Spread):** We initially created `interpolate_fire_morphology.py` to synthetically grow the fire hour-by-hour to bridge the 24-hour satellite gaps. 
-*   **The Model Failure (Predicting Delta):** We asked the network to predict *only* the newly ignited pixels (the Delta) between T and T+1. Because the interpolated expansion for a single hour was microscopically thin, it was impossible for the ML model to learn it against the massive class imbalance. F1 scores collapsed to 0.000.
-*   **The Model Failure (Predicting T+1 with T as input):** We then changed the objective to predict the *entire* fire state at T+1, passing the current fire map (`MODIS_FIRE_T1`) as a 14th input channel. Because T and T+1 overlap by >99.9%, the UNet learned an "Identity Function." It simply copied the 14th input channel directly to the output. It ignored wind, slope, and temperature entirely, instantly achieving a 0.99 F1 score while fundamentally failing to learn any physics.
+### The Solution: ML for Fuel + Tensor CA for Spread
+Because the temporal resolution of satellites is fundamentally too low to teach a pure neural network fluid dynamics hour-by-hour, we restructured the architecture:
+1.  **Strip the Temporal Cheat:** The UNet is **no longer a temporal predictor**. It is now a **Static Burn Susceptibility (Fuel) Model**. It receives 13 channels (Weather, Vegetation, Topography, Burn Scar) but is completely blind to where the fire currently is. It outputs a 2D probability matrix representing inherent flammability.
+2.  **PyTorch Tensor Physics Engine:** Instead of training ML to guess wind vectors, we explicitly enforce them. The temporal advection (movement over time) runs in the Python backend via a **Cellular Automaton (CA)** powered by PyTorch 2D Convolutions (`torch.nn.functional.conv2d`). This allows us to process 14,400 cells simultaneously, applying mathematically rigorous penalties for upwind spread and bonuses for uphill slope spread.
 
-## 2. The Solution: ML for Fuel + CA for Spread
-Because the temporal resolution of satellites is fundamentally too low to teach a pure neural network fluid dynamics hour-by-hour, we restructured the architecture to mimic Google's Next Day Wildfire Dataset (NDWD) philosophy while supporting an interactive 60fps frontend simulation.
+## 2. Frontend & Map Infrastructure
 
-### Step 1: Strip the Temporal Cheat from the ML Model
-We updated `Model/train.py` to set `include_fire_input=False`. 
-*   **The Pivot:** The UNet is **no longer a temporal predictor**. It is now a **Static Burn Susceptibility (Fuel) Model**. 
-*   **Input:** 13 channels (Weather, Vegetation, Topography, Burn Scar). It does *not* know where the fire currently is.
-*   **Output:** A single 2D probability matrix representing the inherent flammability/susceptibility of every pixel based on the static landscape and current weather.
+### Next.js 15 App Router
+The frontend transitioned from standalone React scripts to the modern **Next.js 15 App Router**. This provides built-in server-side rendering (SSR), optimized routing, and a clean monorepo separation (`Frontend/`). The UI is built using **TailwindCSS** and **Shadcn UI** for strict, highly-polished aesthetics.
 
-### Step 2: Empower the Physics Engine (Cellular Automata)
-Since the ML model handles the complex, non-linear pattern recognition of the terrain, we moved the actual temporal advection (movement over time) out of PyTorch and into a hard-coded mathematical engine.
-*   **The Integration:** The React frontend (and Python backend) runs a standard Cellular Automaton.
-*   **How it works:** The user drops a fire ignition point on the map. The CA algorithm looks at the underlying ML-generated Susceptibility Map to see if the pixel can burn, and then uses explicit mathematical rules (based on the user's Wind Speed and Direction sliders) to push the fire to neighboring pixels. 
+### React-Leaflet for Spatiotemporal Mapping
+We selected **Leaflet** (via `react-leaflet`) over Google Maps/Mapbox for the Interactive Dashboard. Leaflet provides superior flexibility for injecting raw HTML5 Canvas layers (necessary for rendering the 320x400 ML probability matrices) and custom GeoJSON vector polygons directly on top of Esri `World_Street_Map` tiles without API cost constraints.
 
-## 3. Results and Current State
-This hybrid approach successfully bypasses the limitations of sparse satellite data:
-1.  **Valid Metrics:** By removing the `MODIS_FIRE_T1` cheat channel, the UNet is forced to actually synthesize the weather and elevation data. It currently achieves a highly legitimate `0.94` F1 score on predicting burn probability based on environmental factors alone.
-2.  **Physics Compliance:** Because the temporal spread is driven by the CA engine in the frontend, the simulation perfectly obeys wind direction and speed constraints without suffering from the ML model "teleporting" fires.
+## 3. Dual-Pathfinding Architecture
+
+To make the fire spread actionable, the platform requires an evacuation routing system. We implemented a hybrid dual-system approach:
+
+### OpenRouteService (ORS) - The Primary Engine
+For real-world utility, users need directions that follow actual streets and highways. 
+*   **Decision:** We integrated the open-source ORS API. 
+*   **Challenge:** ORS crashes if given complex, overlapping fire pixels or if the user clicks a coordinate slightly off a road.
+*   **Solution:** We built a clustering algorithm in `MapSimulation.tsx` that groups individual fire pixels into 5x5 bounding boxes. We pass these clusters to ORS as `avoid_polygons`. To fix the off-road clicking, we inject `radiuses: [-1, -1]` into the payload, forcing ORS to infinitely snap the user's Start and Goal coordinates to the nearest valid road network.
+
+### D* Lite - The Grid Fallback Engine
+ORS requires an internet connection and strict road networks. In a deep forest fire, officials may need off-road evacuation metrics.
+*   **Decision:** We implemented the **D* Lite** algorithm directly in the Python FastAPI backend (`Server/app/d_star_lite.py`).
+*   **Why D* Lite?:** Unlike A* which must recalculate the entire map if a new fire spawns, D* Lite is dynamic. It searches backward from Goal to Start. When the CA engine spawns a new fire blocking the path, D* Lite only updates the affected node costs and instantly recalculates the new safest path across the raw ML probability tensor grid.
