@@ -8,6 +8,7 @@ import { Progress } from "@/components/ui/progress"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend } from "recharts"
 import { Brain, Target, TrendingUp, Zap, CheckCircle, AlertTriangle, ShieldCheck, Globe, Layers, ArrowRight, Info } from "lucide-react"
+import ComparisonSandbox from "./ComparisonSandbox"
 
 const performanceData = [
   { metric: "F1 Score", NDWS: 0.36, Custom: 0.94 },
@@ -205,6 +206,11 @@ export default function MLInsightsPage() {
                   </div>
                 </CardContent>
               </Card>
+            </div>
+
+            {/* Side-by-Side Simulation Sandbox */}
+            <div className="mt-8">
+              <ComparisonSandbox />
             </div>
           </TabsContent>
 
