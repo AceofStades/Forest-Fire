@@ -132,3 +132,41 @@ async def get_safe_path(req: PathRequest):
             break
 
     return {"path": path}
+
+class SandboxRequest(BaseModel):
+    size: int
+    ndws_grid: List[int]
+    custom_grid: List[int]
+    terrain_grid: List[float]
+    wind_speed: float
+    wind_dir: float
+    temperature: float
+    steepness: float
+
+class SandboxResponse(BaseModel):
+    next_ndws: List[int]
+    next_custom: List[int]
+
+from .sandbox_engine import run_ndws_step, run_custom_hybrid_step
+
+@app.post("/sandbox-step", response_model=SandboxResponse)
+async def sandbox_step(req: SandboxRequest):
+    size = req.size
+    # Reshape
+    ndws_np = np.array(req.ndws_grid, dtype=np.uint8).reshape((size, size))
+    custom_np = np.array(req.custom_grid, dtype=np.uint8).reshape((size, size))
+    terrain_np = np.array(req.terrain_grid, dtype=np.float32).reshape((size, size))
+    
+    # Process
+    temp_mod = max(0.01, (req.temperature - 10) / 40.0)
+    next_ndws = run_ndws_step(ndws_np, temp_mod)
+    next_custom = run_custom_hybrid_step(
+        custom_np, terrain_np, 
+        req.wind_speed, req.wind_dir, 
+        req.temperature, req.steepness
+    )
+    
+    return {
+        "next_ndws": next_ndws.flatten().tolist(),
+        "next_custom": next_custom.flatten().tolist()
+    }
