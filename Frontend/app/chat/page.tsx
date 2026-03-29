@@ -57,7 +57,7 @@ export default function ChatPage() {
 			formData.append("query", content);
 
 			const response = await fetch(
-				"http://127.0.0.1:8000/chatbot-response",
+				"/api/chatbot-response",
 				{
 					method: "POST",
 					body: formData,

@@ -127,7 +127,7 @@ export default function MapSimulation() {
     ];
 
     useEffect(() => {
-        fetch("http://127.0.0.1:8000/historical-events")
+        fetch("/api/historical-events")
             .then((res) => res.json())
             .then((data) => setEvents(data))
             .catch((err) => console.error(err));
@@ -245,7 +245,7 @@ export default function MapSimulation() {
             }
 
             // FALLBACK TO BACKEND D* LITE
-            const response = await fetch("http://127.0.0.1:8000/get-safe-path", {
+            const response = await fetch("/api/get-safe-path", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ 
@@ -286,7 +286,7 @@ export default function MapSimulation() {
         setIsSandbox(false);
         clearPath();
         try {
-            const res = await fetch(`http://127.0.0.1:8000/event-data/${id}?hours=30`);
+            const res = await fetch(`/api/event-data/${id}?hours=30`);
             const data: EventData = await res.json();
             setEventData(data);
 
@@ -310,7 +310,7 @@ export default function MapSimulation() {
         stateGrid.current.fill(0);
         stateHistory.current = [new Uint8Array(stateGrid.current)];
 
-        fetch("http://127.0.0.1:8000/fire-grid")
+        fetch("/api/fire-grid")
             .then((res) => res.json())
             .then((data) => {
                 const newData: EventData = {

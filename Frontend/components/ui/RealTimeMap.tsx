@@ -13,7 +13,7 @@ export default function RealTimeMap() {
     const startGrid = gpsToGrid(userPos[0], userPos[1]);
     const goalGrid = gpsToGrid(rescueCenter[0], rescueCenter[1]);
 
-    const res = await fetch('http://localhost:8000/get-safe-path', {
+    const res = await fetch('/api/get-safe-path', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ start: startGrid, goal: goalGrid })

@@ -14,7 +14,7 @@ export default function HomePage() {
 
   const fetchPrediction = async () => {
     try {
-      const response = await axios.post("http://localhost:8000/predict", {
+      const response = await axios.post("/api/predict", {
         temperature: 25,
         humidity: 70,
         wind_speed: 5,

@@ -108,7 +108,7 @@ export default function ComparisonSandbox() {
 
     const stepSimulation = useCallback(async () => {
         try {
-            const response = await fetch("http://127.0.0.1:8000/sandbox-step", {
+            const response = await fetch("/api/sandbox-step", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
