@@ -157,88 +157,138 @@ export default function MapSimulation() {
             const apiKey = process.env.NEXT_PUBLIC_ORS_API_KEY;
 
             if (apiKey && apiKey.length > 10) {
-                setRoutingStatus("ORS Vector Routing...");
-                // OPENROUTESERVICE VECTOR ROUTING
-                const startLatLng = rowColToLatLng(startTuple[0], startTuple[1]);
-                const goalLatLng = rowColToLatLng(goalTuple[0], goalTuple[1]);
+                try {
+                    setRoutingStatus("ORS Vector Routing...");
+                    // OPENROUTESERVICE VECTOR ROUTING
+                    const startLatLng = rowColToLatLng(startTuple[0], startTuple[1]);
+                    const goalLatLng = rowColToLatLng(goalTuple[0], goalTuple[1]);
 
-                // Cluster fires into 5x5 blocks to prevent overloading ORS with thousands of polygons
-                const blockSize = 5;
-                const blocks = new Map<string, {minR: number, maxR: number, minC: number, maxC: number}>();
-                
-                for(const [r, c] of activeFires) {
-                    const br = Math.floor(r / blockSize);
-                    const bc = Math.floor(c / blockSize);
-                    const key = `${br},${bc}`;
-                    if (!blocks.has(key)) {
-                        blocks.set(key, {minR: r, maxR: r, minC: c, maxC: c});
-                    } else {
-                        const b = blocks.get(key)!;
-                        b.minR = Math.min(b.minR, r);
-                        b.maxR = Math.max(b.maxR, r);
-                        b.minC = Math.min(b.minC, c);
-                        b.maxC = Math.max(b.maxC, c);
-                    }
-                }
+                    // FILTER FIRES BY RELEVANCE (Bounding box around start/goal)
+                    // We only care about fires that are somewhat near the path.
+                    const margin = 40; // ~30km margin around the direct line
+                    const minPathR = Math.min(startTuple[0], goalTuple[0]) - margin;
+                    const maxPathR = Math.max(startTuple[0], goalTuple[0]) + margin;
+                    const minPathC = Math.min(startTuple[1], goalTuple[1]) - margin;
+                    const maxPathC = Math.max(startTuple[1], goalTuple[1]) + margin;
 
-                const polygons = Array.from(blocks.values()).map(b => {
-                    const p1 = rowColToLatLng(Math.max(0, b.minR - 1), Math.max(0, b.minC - 1)); // Top-Left
-                    const p2 = rowColToLatLng(Math.max(0, b.minR - 1), Math.min(COLS - 1, b.maxC + 1)); // Top-Right
-                    const p3 = rowColToLatLng(Math.min(ROWS - 1, b.maxR + 1), Math.min(COLS - 1, b.maxC + 1)); // Bottom-Right
-                    const p4 = rowColToLatLng(Math.min(ROWS - 1, b.maxR + 1), Math.max(0, b.minC - 1)); // Bottom-Left
+                    const relevantFires = activeFires.filter(([r, c]) => {
+                        return r >= minPathR && r <= maxPathR && c >= minPathC && c <= maxPathC;
+                    });
+
+                    // Cluster relevant fires into blocks to prevent overloading ORS limits
+                    let blockSize = 2;
+                    let blocks = new Map<string, {minR: number, maxR: number, minC: number, maxC: number}>();
                     
-                    // ORS expects [lon, lat] format for GeoJSON
-                    return [[
-                        [p1[1], p1[0]],
-                        [p2[1], p2[0]],
-                        [p3[1], p3[0]],
-                        [p4[1], p4[0]],
-                        [p1[1], p1[0]] // Close the loop
-                    ]];
-                });
-
-                // ONLY send polygons if there are less than 20 blocks. ORS errors on too many polygons.
-                const avoidPolygons = polygons.length > 0 && polygons.length <= 25 ? polygons : undefined;
-
-                const requestBody: any = {
-                    coordinates: [
-                        [startLatLng[1], startLatLng[0]], // Start [lon, lat]
-                        [goalLatLng[1], goalLatLng[0]]    // Goal [lon, lat]
-                    ],
-                    radiuses: [-1, -1] // -1 means unlimited radius to find the nearest road
-                };
-
-                if (avoidPolygons) {
-                    requestBody.options = {
-                        avoid_polygons: {
-                            coordinates: avoidPolygons,
-                            type: "MultiPolygon"
+                    while (blockSize <= 6) { // Strict cap on size to NEVER create massive area polygons
+                        blocks.clear();
+                        for(const [r, c] of relevantFires) {
+                            const br = Math.floor(r / blockSize);
+                            const bc = Math.floor(c / blockSize);
+                            const key = `${br},${bc}`;
+                            if (!blocks.has(key)) {
+                                blocks.set(key, {minR: r, maxR: r, minC: c, maxC: c});
+                            } else {
+                                const b = blocks.get(key)!;
+                                b.minR = Math.min(b.minR, r);
+                                b.maxR = Math.max(b.maxR, r);
+                                b.minC = Math.min(b.minC, c);
+                                b.maxC = Math.max(b.maxC, c);
+                            }
                         }
+                        
+                        if (blocks.size <= 20) break;
+                        blockSize += 2;
+                    }
+
+                    // Convert blocks to an array
+                    let sortedBlocks = Array.from(blocks.values());
+                    
+                    // If we still have > 20 blocks, prioritize those closest to the route's midpoint
+                    if (sortedBlocks.length > 20) {
+                        const midR = (startTuple[0] + goalTuple[0]) / 2;
+                        const midC = (startTuple[1] + goalTuple[1]) / 2;
+                        sortedBlocks.sort((a, b) => {
+                            const centerA_R = (a.minR + a.maxR) / 2;
+                            const centerA_C = (a.minC + a.maxC) / 2;
+                            const distA = Math.pow(centerA_R - midR, 2) + Math.pow(centerA_C - midC, 2);
+                            
+                            const centerB_R = (b.minR + b.maxR) / 2;
+                            const centerB_C = (b.minC + b.maxC) / 2;
+                            const distB = Math.pow(centerB_R - midR, 2) + Math.pow(centerB_C - midC, 2);
+                            
+                            return distA - distB;
+                        });
+                        sortedBlocks = sortedBlocks.slice(0, 20);
+                    }
+
+                    const polygons = sortedBlocks.map(b => {
+                        // Pad the bounding box by 1 pixel to ensure a safe distance
+                        const p1 = rowColToLatLng(Math.max(0, b.minR - 1), Math.max(0, b.minC - 1)); // NW
+                        const p2 = rowColToLatLng(Math.max(0, b.minR - 1), Math.min(COLS - 1, b.maxC + 1)); // NE
+                        const p3 = rowColToLatLng(Math.min(ROWS - 1, b.maxR + 1), Math.min(COLS - 1, b.maxC + 1)); // SE
+                        const p4 = rowColToLatLng(Math.min(ROWS - 1, b.maxR + 1), Math.max(0, b.minC - 1)); // SW
+                        
+                        // ORS expects [lon, lat] format for GeoJSON
+                        // MUST BE COUNTER-CLOCKWISE! NW -> SW -> SE -> NE -> NW
+                        return [[
+                            [p1[1], p1[0]], // NW
+                            [p4[1], p4[0]], // SW
+                            [p3[1], p3[0]], // SE
+                            [p2[1], p2[0]], // NE
+                            [p1[1], p1[0]]  // NW (Close the loop)
+                        ]];
+                    });
+
+                    const avoidPolygons = polygons.length > 0 ? polygons : undefined;
+
+                    const requestBody: any = {
+                        coordinates: [
+                            [startLatLng[1], startLatLng[0]],
+                            [goalLatLng[1], goalLatLng[0]]
+                        ],
+                        radiuses: [-1, -1]
                     };
-                }
 
-                const res = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
-                    method: "POST",
-                    headers: {
-                        "Authorization": apiKey,
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify(requestBody)
-                });
+                    if (avoidPolygons) {
+                        requestBody.options = {
+                            avoid_polygons: {
+                                coordinates: avoidPolygons,
+                                type: "MultiPolygon"
+                            }
+                        };
+                    }
 
-                const data = await res.json();
-                
-                if (data.features && data.features.length > 0) {
-                    const coords = data.features[0].geometry.coordinates;
-                    const latLngPath = coords.map((c: number[]) => [c[1], c[0]] as [number, number]);
-                    setSafePath(latLngPath);
-                    setRoutingStatus("ORS Route Active");
-                    setIsCalculatingPath(false);
-                    return; // Exit successfully
-                } else {
-                    console.warn("ORS routing failed or no path found, falling back to D* Lite...", data);
-                    const errorMsg = data.error?.message || "No Route Found";
-                    setRoutingStatus(`ORS Failed: ${errorMsg}. Falling back...`);
+                    const res = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
+                        method: "POST",
+                        headers: {
+                            "Authorization": apiKey,
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify(requestBody)
+                    });
+
+                    const data = await res.json();
+                    
+                    if (data.features && data.features.length > 0) {
+                        const coords = data.features[0].geometry.coordinates;
+                        const latLngPath = coords.map((c: number[]) => [c[1], c[0]] as [number, number]);
+                        setSafePath(latLngPath);
+                        setRoutingStatus("ORS Route Active");
+                        setIsCalculatingPath(false);
+                        return; // Exit successfully
+                    } else {
+                        const errorMsg = data.error?.message || "No Route Found";
+                        if (errorMsg.toLowerCase().includes("area of polygon")) {
+                            console.warn("ORS area limit exceeded, silently falling back to D* Lite");
+                            setRoutingStatus("Fire too large for ORS. Using D* Lite...");
+                        } else {
+                            console.warn("ORS routing failed, falling back to D* Lite...", data);
+                            setRoutingStatus(`ORS Failed. Using D* Lite...`);
+                        }
+                    }
+                } catch (orsError) {
+                    console.error("ORS API Error:", orsError);
+                    setRoutingStatus("ORS Error. Falling back to D* Lite...");
                 }
             } else {
                 setRoutingStatus("ORS Key Missing. Fallback D* Lite...");
