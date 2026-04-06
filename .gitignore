@@ -309,3 +309,4 @@ checkouts/
 
 .env*
 AGENTS.md
+*.tex
