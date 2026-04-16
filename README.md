@@ -1,4 +1,4 @@
-# Forest-Fire Prediction & Simulation Platform
+# Forest-Fire Prediction & Simulation Platform 
 
 <div align="center">
 
@@ -18,7 +18,7 @@
 
 ## Overview
 
-**Forest-Fire** is an integrated platform designed to assist in wildfire management and prevention. By leveraging satellite data, deep learning (U-Net), and pathfinding algorithms (D* Lite), this tool provides actionable insights into fire spread and safe evacuation routes.
+**Forest-Fire** is an integrated platform designed to assist in wildfire management and prevention. By leveraging satellite data, deep learning (U-Net), and pathfinding algorithms (D* Lite), this tool provides actionable insights into fire spread and safe evacuation routes
 
 The system consists of a robust **FastAPI** backend that serves predictions from a PyTorch-based model, and a modern **Next.js** frontend that visualizes data in 2D, offers simulation controls, and provides an interactive dashboard for decision-makers.
 
