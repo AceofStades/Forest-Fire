@@ -8,7 +8,9 @@ import xarray as xr
 st.set_page_config(layout="wide")
 
 # --- PATH SETUP ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 
 
 # Helper to join paths relative to the script location
