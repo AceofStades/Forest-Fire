@@ -153,6 +153,38 @@ def get_dense_samples(path, var_name, num_samples=3):
 st.title("Forest Fire Project Diagnostics")
 st.divider()
 
+st.subheader("In-depth Model Hyperparameters")
+
+# Hyperparameter Data
+hyperparams_data = {
+    "Model": [
+        "Legacy UNet",
+        "ConvLSTM",
+        "Hybrid Model",
+        "Custom Dataset (UNet/ConvLSTM)",
+    ],
+    "Epochs": [25, 15, 50, 30],
+    "Batch Size": [8, 4, 32, 16],
+    "Accumulation Steps": [1, 1, 1, 8],
+    "Learning Rate": ["1e-3", "1e-3", "1e-4", "1e-3"],
+    "Optimizer": ["Adam", "Adam", "Adam", "AdamW"],
+    "Weight Decay": ["0", "0", "1e-4", "1e-4"],
+    "Scheduler": ["None", "None", "None", "CosineAnnealingWarmRestarts"],
+    "Loss Function": [
+        "BCEWithLogitsLoss / FocalLoss (implied)",
+        "BCEWithLogitsLoss",
+        "BCEWithLogitsLoss + Dice",
+        "CombinedLoss (Focal + Dice / Tversky)",
+    ],
+    "BCE pos_weight": ["-", "-", "20.0", "500-3000 (tuned)"],
+    "Sequence Length": ["-", "3", "3", "4"],
+    "Hidden Dims": ["-", "[32, 32, 32]", "[64] (LSTM part)", "[64, 64]"],
+}
+df_hyperparams = pd.DataFrame(hyperparams_data)
+st.dataframe(df_hyperparams, use_container_width=True, hide_index=True)
+
+st.divider()
+
 st.subheader("Model Performance Comparison")
 
 # Parse and create CSVs
