@@ -1,0 +1,51 @@
+version: "3.8"
+
+services:
+  database:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: forestfire
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  core-backend:
+    build:
+      context: ./CoreBackend
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://database:5432/forestfire
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=password
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+      - INFERENCE_ENGINE_URL=http://inference-engine:8000
+    depends_on:
+      - database
+
+  inference-engine:
+    build:
+      context: ./Server
+    ports:
+      - "8000:8000"
+    environment:
+      - ALLOWED_ORIGINS=*
+      - MODEL_PATH=/models/model.pkl
+    volumes:
+      - ./Model:/models:ro
+
+  frontend:
+    build:
+      context: ./Frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+    depends_on:
+      - core-backend
+
+volumes:
+  postgres_data:
