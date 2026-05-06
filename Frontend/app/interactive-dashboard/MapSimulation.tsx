@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Flame, MapPin, Flag, Route, Trash2, ShieldAlert, Play, Pause, FastForward } from "lucide-react";
+import { useTheme } from "next-themes";
 
 interface EventData {
     probGrid: number[][];
@@ -112,8 +113,9 @@ export default function MapSimulation() {
     const [isSandbox, setIsSandbox] = useState<boolean>(false);
     const [humidity, setHumidity] = useState<number>(25);
     const [ignitionThreshold, setIgnitionThreshold] = useState<number>(0.3);
-    const [mapLayer, setMapLayer] = useState<"dark" | "satellite" | "terrain" | "streets">("dark");
+    const [mapLayer, setMapLayer] = useState<"base" | "satellite" | "terrain" | "streets">("base");
     const [imageUrl, setImageUrl] = useState<string>("");
+    const { theme } = useTheme();
 
     const ROWS = 320;
     const COLS = 400;
@@ -633,7 +635,7 @@ export default function MapSimulation() {
                         <div className="pt-4 border-t border-slate-800">
                             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Map Topology</h3>
                             <div className="grid grid-cols-2 gap-2">
-                                <Button variant={mapLayer === "dark" ? "secondary" : "outline"} onClick={() => setMapLayer("dark")} className="h-10 text-xs bg-slate-800 border-slate-700">Dark</Button>
+                                <Button variant={mapLayer === "base" ? "secondary" : "outline"} onClick={() => setMapLayer("base")} className="h-10 text-xs bg-slate-800 border-slate-700">Base</Button>
                                 <Button variant={mapLayer === "satellite" ? "secondary" : "outline"} onClick={() => setMapLayer("satellite")} className="h-10 text-xs bg-slate-800 border-slate-700">Sat</Button>
                                 <Button variant={mapLayer === "terrain" ? "secondary" : "outline"} onClick={() => setMapLayer("terrain")} className="h-10 text-xs bg-slate-800 border-slate-700">Terr</Button>
                                 <Button variant={mapLayer === "streets" ? "secondary" : "outline"} onClick={() => setMapLayer("streets")} className="h-10 text-xs bg-slate-800 border-slate-700">Streets</Button>
@@ -716,8 +718,9 @@ export default function MapSimulation() {
                     </div>
 
                     <div className="flex-1 relative z-0">
-                        <MapContainer center={[30.1, 79.2]} zoom={8} style={{ height: "100%", width: "100%", background: "#0f172a" }}>
-                            {mapLayer === "dark" && <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />}
+                        <MapContainer center={[30.1, 79.2]} zoom={8} style={{ height: "100%", width: "100%", background: theme === 'light' ? "#f1f5f9" : "#0f172a" }}>
+                            {mapLayer === "base" && theme === 'light' && <TileLayer key="light" url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" />}
+                            {mapLayer === "base" && theme !== 'light' && <TileLayer key="dark" url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />}
                             {mapLayer === "satellite" && <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" />}
                             {mapLayer === "terrain" && <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}" />}
                             {mapLayer === "streets" && <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}" />}

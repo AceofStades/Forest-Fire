@@ -3,11 +3,13 @@ import { MapContainer, TileLayer, Polyline, Marker, Popup, useMap } from 'react-
 import 'leaflet/dist/leaflet.css';
 import { useState } from 'react';
 import { gridToGPS, gpsToGrid } from '@/lib/geoUtils';
+import { useTheme } from "next-themes";
 
 export default function RealTimeMap() {
   const [path, setPath] = useState<[number, number][]>([]);
   const [userPos, setUserPos] = useState<[number, number]>([30.0668, 79.0193]); // Pauri, Uttarakhand
   const rescueCenter: [number, number] = [30.1500, 79.3000];
+  const { theme } = useTheme();
 
   const getSafePath = async () => {
     const startGrid = gpsToGrid(userPos[0], userPos[1]);
@@ -28,7 +30,11 @@ export default function RealTimeMap() {
   return (
     <div className="w-full h-[600px] rounded-xl overflow-hidden shadow-2xl border-4 border-slate-800">
       <MapContainer center={userPos} zoom={9} style={{ height: '100%', width: '100%' }}>
-        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+        {theme === 'light' ? (
+          <TileLayer key="light" url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png" />
+        ) : (
+          <TileLayer key="dark" url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" />
+        )}
         
         {/* The Safe Path drawn from D* Lite output */}
         {path.length > 0 && (

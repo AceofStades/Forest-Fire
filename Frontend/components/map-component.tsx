@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react"
 import L from "leaflet"
 import "leaflet/dist/leaflet.css"
+import { useTheme } from "next-themes"
 
 // Fix for default markers in Leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl
@@ -29,6 +30,7 @@ export default function MapComponent({ layers, timeStep }: MapComponentProps) {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<L.Map | null>(null)
   const layersRef = useRef<{ [key: string]: L.Layer }>({})
+  const { theme } = useTheme()
 
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return
@@ -38,10 +40,16 @@ export default function MapComponent({ layers, timeStep }: MapComponentProps) {
     mapInstanceRef.current = map
 
     // Add base tile layer
-    const baseLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "© OpenStreetMap contributors",
-    })
+    const baseLayer = L.tileLayer(
+      theme === "light" 
+        ? "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+        : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+      {
+        attribution: "© OpenStreetMap contributors",
+      }
+    )
     baseLayer.addTo(map)
+    layersRef.current.base = baseLayer
 
     // Create different layer types
     const fireProbabilityLayer = L.tileLayer(
@@ -121,6 +129,18 @@ export default function MapComponent({ layers, timeStep }: MapComponentProps) {
       }
     }
   }, [])
+
+  // Update base layer URL when theme changes
+  useEffect(() => {
+    if (layersRef.current.base) {
+      const baseLayer = layersRef.current.base as L.TileLayer
+      baseLayer.setUrl(
+        theme === "light"
+          ? "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+          : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+      )
+    }
+  }, [theme])
 
   // Update layers based on props
   useEffect(() => {
