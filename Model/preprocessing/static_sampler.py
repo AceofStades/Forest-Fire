@@ -34,6 +34,9 @@ def resample_fixed(input_path, output_path, is_categorical=False):
 
         profile = src.profile
         profile.update(
+            # Only band 1 is read and written; without count=1 a 3-band source
+            # (the RGB LULC render) produces an output with two empty bands.
+            count=1,
             width=target_width,
             height=target_height,
             transform=rasterio.transform.from_bounds(
