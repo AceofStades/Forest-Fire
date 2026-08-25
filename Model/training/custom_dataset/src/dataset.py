@@ -10,9 +10,25 @@ from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 # --- CONFIGURATION ---
-INPUT_NC_PATH = "dataset/final_feature_stack_DYNAMIC_interpolated.nc"
+INPUT_NC_PATH = "dataset/final_feature_stack_RELEASE.nc"
 CACHE_PATH = "stats_cache.pkl"
 ERA5_FEATURE_VARS = ["d2m", "t2m", "swvl1", "e", "u10", "v10", "tp", "cvl"]
+
+# LULC codes that are not land cover: 0 = UNCLASSIFIED, 1 = white map
+# background, 3 = grey map background. See dataset/LULC/lulc_legend.csv, whose
+# is_background column is the source of truth. Together they cover ~57% of the
+# grid, because the LULC source maps only the state polygon while the grid is a
+# rectangle around it.
+#
+# Note: codes 10 and 14 are blue and are most likely water bodies, but the
+# legend carries no class names, so they are left burnable rather than guessed.
+LULC_BACKGROUND_CODES = (0, 1, 3)
+
+# Every channel derived from the fire observations. All of them must stay out of
+# the input features unless autoregressive mode is explicitly requested.
+# BURNED_AREA is deliberately NOT here: it is the pre-T burn scar and was always
+# used as a legitimate input feature (as the old hand-rolled Burn_Scar).
+FIRE_CHANNELS = ("ACTIVE_FIRE", "OBSERVED_FIRE")
 
 
 def _resolve_path(nc_path):
@@ -39,29 +55,36 @@ def _resolve_path(nc_path):
 
 def _load_ds(nc_path=None, include_fire_input=False):
     """Load dataset into RAM. Returns (ds_loaded, feature_vars, total_steps).
-    If include_fire_input=True, MODIS_FIRE_T1 at time T is included as a feature.
-    Also dynamically calculates a Burn_Scar feature which is 1 if the pixel has ever been on fire.
-    Engineers Water_Mask from LULC and calculates Slope from DEM."""
+    If include_fire_input=True, ACTIVE_FIRE at time T is included as a feature.
+    BURNED_AREA (cumulative burn scar) ships with the dataset.
+    Engineers Burnable_Mask from LULC and calculates Slope from DEM."""
     path = _resolve_path(nc_path or INPUT_NC_PATH)
     print(f"--- Loading dataset into RAM ({path}) ---")
     with xr.open_dataset(path, engine="h5netcdf", chunks=None) as ds:
         ds_loaded = ds.load()
 
-        # Calculate Burn_Scar
-        print("--- Calculating Burn_Scar (cumulative fire history) ---")
-        burn_scar = ds_loaded["MODIS_FIRE_T1"].cumsum(dim="valid_time")
-        burn_scar = xr.where(burn_scar > 0, 1.0, 0.0).astype(np.float32)
-        ds_loaded["Burn_Scar"] = burn_scar
+        # BURNED_AREA now ships with the dataset as the running maximum of
+        # ACTIVE_FIRE, so the old hand-rolled cumsum is redundant. Kept as a
+        # fallback for the previous file, which has no such variable.
+        if "BURNED_AREA" not in ds_loaded:
+            print("--- BURNED_AREA absent; deriving it from ACTIVE_FIRE ---")
+            burn_scar = ds_loaded["ACTIVE_FIRE"].cumsum(dim="valid_time")
+            ds_loaded["BURNED_AREA"] = xr.where(burn_scar > 0, 1.0, 0.0).astype(
+                np.float32
+            )
 
-        # Engineer Water Mask from LULC (Assuming class 0 or specific class is water)
-        # Bhuvan LULC: typically Water bodies are a specific class.
-        # For generalization, if LULC <= 0 (or specific value), it's non-burnable.
-        # Let's assume class 0 is water/null.
-        print("--- Engineering Water_Mask from LULC ---")
+        # Engineer a burnable-fuel mask from LULC.
+        #
+        # The old rule was (LULC > 0), which assumed code 0 meant water. Under
+        # the reconstructed legend, 0 is UNCLASSIFIED and codes 1 and 3 are the
+        # white and grey *map background* outside the mapped state polygon. The
+        # old rule therefore called 95.3% of the grid burnable; excluding the
+        # background codes gives 43.0%, which is the actually-mapped area.
+        print("--- Engineering Burnable_Mask from LULC ---")
         lulc_data = ds_loaded["LULC"].values
-        # 1.0 means burnable, 0.0 means water/barren
-        water_mask = (lulc_data > 0).astype(np.float32)
-        ds_loaded["Water_Mask"] = (("latitude", "longitude"), water_mask)
+        # 1.0 means burnable land cover, 0.0 means background/unclassified.
+        burnable = (~np.isin(lulc_data, LULC_BACKGROUND_CODES)).astype(np.float32)
+        ds_loaded["Burnable_Mask"] = (("latitude", "longitude"), burnable)
 
         # Engineer Urban Mask from GHS_BUILT
         print("--- Engineering Urban_Mask from GHS_BUILT ---")
@@ -84,11 +107,18 @@ def _load_ds(nc_path=None, include_fire_input=False):
         if include_fire_input:
             feature_vars = list(ds_loaded.data_vars)
         else:
-            feature_vars = [v for v in ds_loaded.data_vars if v != "MODIS_FIRE_T1"]
+            # Exclude EVERY observed-fire channel, not just the target. The old
+            # file had a single fire variable, so dropping the target was enough;
+            # this one also ships OBSERVED_FIRE, and OBSERVED_FIRE[t] determines
+            # ACTIVE_FIRE[t..t+12] by construction, so leaving it in leaks the
+            # answer straight into the inputs.
+            feature_vars = [
+                v for v in ds_loaded.data_vars if v not in FIRE_CHANNELS
+            ]
 
         total_steps = ds_loaded.sizes["valid_time"]
 
-    fire_frames = int((ds_loaded["MODIS_FIRE_T1"].values.sum(axis=(1, 2)) > 0).sum())
+    fire_frames = int((ds_loaded["ACTIVE_FIRE"].values.sum(axis=(1, 2)) > 0).sum())
     era5_present = [v for v in ERA5_FEATURE_VARS if v in feature_vars]
     era5_missing = [v for v in ERA5_FEATURE_VARS if v not in feature_vars]
     print(
@@ -103,7 +133,7 @@ def _load_ds(nc_path=None, include_fire_input=False):
     if era5_missing:
         print(f"--- Warning: Missing ERA5 channels: {', '.join(era5_missing)} ---")
     if include_fire_input:
-        print("--- MODIS_FIRE_T1 included as input feature (autoregressive mode) ---")
+        print("--- ACTIVE_FIRE included as input feature (autoregressive mode) ---")
     return ds_loaded, feature_vars, total_steps
 
 
@@ -134,7 +164,7 @@ def _compute_global_stats(ds_loaded, feature_vars, cache_path):
         means[i] = np.nanmean(data)
         stds[i] = np.nanstd(data) + 1e-6
 
-        if var in ["MODIS_FIRE_T1", "Burn_Scar", "Water_Mask", "Urban_Mask"]:
+        if var in ["ACTIVE_FIRE", "BURNED_AREA", "Burnable_Mask", "Urban_Mask"]:
             # These are binary/sparse, 98th percentile is often 0. Bypass scaling.
             mins[i] = 0.0
             maxs[i] = 1.0
@@ -172,7 +202,7 @@ class FireDataset(Dataset):
         self.binary_indices = [
             i
             for i, v in enumerate(feature_vars)
-            if v in ["MODIS_FIRE_T1", "Burn_Scar", "Water_Mask", "Urban_Mask"]
+            if v in ["ACTIVE_FIRE", "BURNED_AREA", "Burnable_Mask", "Urban_Mask"]
         ]
 
     def __len__(self):
@@ -189,7 +219,7 @@ class FireDataset(Dataset):
         )
 
         # TARGET: Predict the entire fire state at T+1, not just the newly ignited pixels.
-        next_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=t_idx + 1).values
+        next_fire = self.ds["ACTIVE_FIRE"].isel(valid_time=t_idx + 1).values
         Y_data = np.clip(next_fire, 0, 1)
 
         # Normalization
@@ -242,7 +272,7 @@ class FireSeqDataset(Dataset):
         self.binary_indices = [
             i
             for i, v in enumerate(feature_vars)
-            if v in ["MODIS_FIRE_T1", "Burn_Scar", "Water_Mask", "Urban_Mask"]
+            if v in ["ACTIVE_FIRE", "BURNED_AREA", "Burnable_Mask", "Urban_Mask"]
         ]
 
     def __len__(self):
@@ -283,7 +313,7 @@ class FireSeqDataset(Dataset):
         X_seq = np.stack(frames, axis=0)  # (T, C, H, W)
 
         # TARGET: Predict the entire fire state at T+1, not just the newly ignited pixels.
-        next_fire = self.ds["MODIS_FIRE_T1"].isel(valid_time=target_t_idx + 1).values
+        next_fire = self.ds["ACTIVE_FIRE"].isel(valid_time=target_t_idx + 1).values
         Y_data = np.clip(next_fire, 0, 1)
 
         X_tensor = torch.from_numpy(X_seq).float()
@@ -307,7 +337,7 @@ def _compute_sample_weights(ds_loaded, indices, fire_oversample_ratio=10.0):
     Frames with static fire (which shouldn't exist as much anymore) get 0.1 weight.
     Empty frames get a small weight to keep the network grounded.
     """
-    fire_data = ds_loaded["MODIS_FIRE_T1"].values
+    fire_data = ds_loaded["ACTIVE_FIRE"].values
 
     weights = []
     n_expansion = 0
@@ -419,7 +449,7 @@ def load_split_data(
     Args:
         weighted_sampling: oversample fire-containing target frames.
         fire_oversample_ratio: weight multiplier for fire frames in sampler.
-        include_fire_input: include MODIS_FIRE_T1 at time T as an input channel.
+        include_fire_input: include ACTIVE_FIRE at time T as an input channel.
     """
     ds_loaded, feature_vars, total_steps = _load_ds(
         nc_path, include_fire_input=include_fire_input
@@ -434,7 +464,7 @@ def load_split_data(
     stats = _compute_global_stats(ds_loaded, feature_vars, cache)
 
     indices = np.arange(total_steps - 1)
-    fire_data = ds_loaded["MODIS_FIRE_T1"].values
+    fire_data = ds_loaded["ACTIVE_FIRE"].values
     train_idx, val_idx = _split_indices_with_positive_guard(indices, fire_data)
 
     train_ds = FireDataset(ds_loaded, train_idx, stats, feature_vars)
@@ -503,7 +533,7 @@ def load_seq_data(
     stats = _compute_global_stats(ds_loaded, feature_vars, cache)
 
     indices = np.arange(seq_len, total_steps - 1)
-    fire_data = ds_loaded["MODIS_FIRE_T1"].values
+    fire_data = ds_loaded["ACTIVE_FIRE"].values
     train_idx, val_idx = _split_indices_with_positive_guard(indices, fire_data)
 
     train_ds = FireSeqDataset(ds_loaded, train_idx, stats, feature_vars, seq_len)
