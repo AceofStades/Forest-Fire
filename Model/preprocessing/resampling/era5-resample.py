@@ -42,20 +42,28 @@ def resample_era5_to_1km(input_nc_path):
         )
 
         # Get the original ERA5 transform
-        x_res = abs(
-            ds_chunk.coords["longitude"].values[1]
-            - ds_chunk.coords["longitude"].values[0]
-        )
-        y_res = abs(
-            ds_chunk.coords["latitude"].values[1]
-            - ds_chunk.coords["latitude"].values[0]
-        )
+        era5_lons = ds_chunk.coords["longitude"].values
+        era5_lats = ds_chunk.coords["latitude"].values
+        x_res = abs(era5_lons[1] - era5_lons[0])
+        y_res = abs(era5_lats[1] - era5_lats[0])
+
+        # from_origin() expects the OUTER CORNER of the top-left cell, but ERA5
+        # coordinates are grid points, i.e. cell CENTRES. Passing the centre
+        # directly places every value half a cell (0.05 deg ~ 5.5 km) south-east
+        # of where it belongs, which is ~5 output pixels at the 1 km target grid.
+        west_edge = era5_lons.min() - x_res / 2
+        north_edge = era5_lats.max() + y_res / 2
         era5_transform = rasterio.transform.from_origin(
-            ds_chunk.coords["longitude"].values[0],
-            ds_chunk.coords["latitude"].values[0],
+            west_edge,
+            north_edge,
             x_res,
             y_res,
         )
+
+        # from_origin() also assumes rows run north -> south. If the source
+        # latitudes ascend, the rows must be flipped to match the transform.
+        if era5_lats[1] > era5_lats[0]:
+            stacked_data = stacked_data[:, ::-1, :]
 
         # Prepare the output array
         output_data = np.empty(

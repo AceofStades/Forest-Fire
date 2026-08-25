@@ -39,6 +39,34 @@ def load_and_clean_static(path, name, template_ds, interp_method="nearest"):
         raise
 
 
+def nearest_index(grid, points):
+    """Index of the nearest cell centre in `grid` for each value in `points`.
+
+    `grid` must be monotonic (ascending or descending). np.searchsorted alone
+    returns an *insertion* index, which always rounds to the same side and so
+    displaces every point by half a cell on average (~500 m on the 1 km grid);
+    here the two candidate neighbours are compared so the true nearest cell wins.
+
+    Points outside the grid clamp to the nearest edge cell, matching the previous
+    behaviour. Uses searchsorted rather than a full |grid - point| broadcast so
+    the cost stays O(n log m) regardless of grid size.
+    """
+    ascending = grid[1] > grid[0]
+    asc_grid = grid if ascending else grid[::-1]
+
+    idx = np.searchsorted(asc_grid, points)
+    idx = np.clip(idx, 1, len(asc_grid) - 1)
+
+    left = asc_grid[idx - 1]
+    right = asc_grid[idx]
+    # Ties and out-of-range points resolve to the closer / nearest edge cell.
+    idx = np.where(points - left < right - points, idx - 1, idx)
+
+    if not ascending:
+        idx = len(grid) - 1 - idx
+    return idx
+
+
 def generate_dynamic_fire_mask(csv_path, template_ds):
     """
     Generates a 3D (Time, Lat, Lon) binary fire mask from MODIS CSV points.
@@ -106,30 +134,9 @@ def generate_dynamic_fire_mask(csv_path, template_ds):
         p_lats = group["latitude"].values
         p_lons = group["longitude"].values
 
-        # Map to indices
-        # We find the nearest lat/lon index for each point
-        # abs(lat_grid - lat_point).argmin()
-
-        # Optimization: broadcasting might be too heavy if grid is large.
-        # But for 300x400 grid it is fine? No, 1km grid is large.
-        # Better to use searchsorted or digitize.
-
-        # Assumption: lats/lons are sorted.
-        # Check sort order
-        if lats[1] > lats[0]:  # Ascending
-            lat_idxs = np.searchsorted(lats, p_lats)
-        else:  # Descending
-            # searchsorted requires ascending
-            lat_idxs = len(lats) - 1 - np.searchsorted(lats[::-1], p_lats)
-
-        if lons[1] > lons[0]:  # Ascending
-            lon_idxs = np.searchsorted(lons, p_lons)
-        else:  # Descending
-            lon_idxs = len(lons) - 1 - np.searchsorted(lons[::-1], p_lons)
-
-        # Clip to bounds
-        lat_idxs = np.clip(lat_idxs, 0, len(lats) - 1)
-        lon_idxs = np.clip(lon_idxs, 0, len(lons) - 1)
+        # Map to indices (nearest cell centre, see nearest_index)
+        lat_idxs = nearest_index(lats, p_lats)
+        lon_idxs = nearest_index(lons, p_lons)
 
         # Mark fire
         # We can use advanced indexing
