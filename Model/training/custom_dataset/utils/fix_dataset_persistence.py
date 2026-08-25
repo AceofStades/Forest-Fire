@@ -1,10 +1,24 @@
+"""SUPERSEDED - kept for reference only.
+
+This script and preprocessing/interpolate_fire_morphology.py both used to write
+dataset/final_feature_stack_DYNAMIC_interpolated.nc with *different* algorithms
+(fixed 24 h forward-fill here, EDT dilation there), so whichever ran last
+silently defined the published label and the file's provenance was ambiguous.
+
+Burn-run analysis of the current published file shows 0% of runs are exactly
+24 h, so it was produced by interpolate_fire_morphology.py, not this script.
+
+The output path below has been changed so running this can no longer clobber the
+canonical artifact. Do not reinstate the old path.
+"""
+
 import xarray as xr
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 input_path = "dataset/final_feature_stack_DYNAMIC_new.nc"
-output_path = "dataset/final_feature_stack_DYNAMIC_interpolated.nc"
+output_path = "dataset/final_feature_stack_DYNAMIC_persistence24h.nc"
 
 print(f"Loading dataset from {input_path}...")
 ds = xr.open_dataset(input_path, engine="h5netcdf")

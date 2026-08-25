@@ -38,7 +38,10 @@ def resample_geotiff(input_path, output_path):
         source_transform = src.transform
         source_crs = src.crs
 
-        destination_array = np.empty(
+        # zeros(), not empty(): reproject only writes cells the source covers, so
+        # an uninitialised buffer leaves stale heap memory in any uncovered
+        # margin. Passing dst_nodata makes the fill explicit as well.
+        destination_array = np.zeros(
             (target_height, target_width), dtype=src.meta["dtype"]
         )
 
@@ -47,6 +50,7 @@ def resample_geotiff(input_path, output_path):
             destination=destination_array,
             src_transform=source_transform,
             src_crs=source_crs,
+            src_nodata=src.nodata if src.nodata is not None else 0,
             dst_transform=rasterio.transform.from_bounds(
                 target_bounds.left,
                 target_bounds.bottom,
@@ -56,6 +60,7 @@ def resample_geotiff(input_path, output_path):
                 target_height,
             ),
             dst_crs=target_crs,
+            dst_nodata=0,
             resampling=Resampling.nearest,
         )
 

@@ -1,3 +1,22 @@
+"""SUPERSEDED - kept for reference only. Do not use for the published dataset.
+
+This script produced the fire label in final_feature_stack_DYNAMIC_interpolated.nc
+and had two defects that made that label unfit to publish:
+
+  1. Non-causal. On detecting a jump at time t it back-filled frames
+     start_t+1 .. t by dilating toward current_frame[t] -- the very frame a model
+     is asked to predict. 99.09% of the resulting label was synthetic, and the
+     synthetic part was a deterministic function of the answer.
+
+  2. Nothing ever extinguished. `last_known_frame` was only replaced when the
+     fire grew, so the mask was monotone: burn runs averaged 323 hours and the
+     24 h persistence baseline reached IoU 0.88.
+
+Causal, bounded persistence now lives in preprocessing/merge_dynamic.py, which
+emits OBSERVED_FIRE, ACTIVE_FIRE and BURNED_AREA directly. The output path below
+has been changed so running this can no longer clobber a release artifact.
+"""
+
 import xarray as xr
 import numpy as np
 from scipy.ndimage import distance_transform_edt
@@ -5,7 +24,7 @@ from tqdm import tqdm
 import os
 
 INPUT_NC_PATH = "dataset/final_feature_stack_DYNAMIC_new.nc"
-OUTPUT_NC_PATH = "dataset/final_feature_stack_DYNAMIC_interpolated.nc"
+OUTPUT_NC_PATH = "dataset/deprecated_morphology_interpolated.nc"
 
 def interpolate_fire(ds):
     """
