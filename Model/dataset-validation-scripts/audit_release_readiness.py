@@ -10,12 +10,13 @@ Run from the Model/ directory:
 """
 
 import os
+import sys
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-NC_PATH = "dataset/final_feature_stack_DYNAMIC_interpolated.nc"
+NC_PATH = sys.argv[1] if len(sys.argv) > 1 else "dataset/final_feature_stack_RELEASE.nc"
 PREV_NC_PATH = "dataset/final_feature_stack_DYNAMIC_new.nc"
 MODIS_CSV = "dataset/MODIS/final-modis.csv"
 LULC_TIF = "dataset/resampled-fix/lulc_resampled.tif"
@@ -24,6 +25,14 @@ LULC_TIF = "dataset/resampled-fix/lulc_resampled.tif"
 DECLARED_BOUNDS = (77.5, 28.7, 81.1, 31.5)  # left, bottom, right, top
 DECLARED_RES = 0.009
 DECLARED_W, DECLARED_H = 400, 311
+
+
+def fire_var(ds):
+    """Name of the active-fire channel in either the old or regenerated schema."""
+    for candidate in ("ACTIVE_FIRE", "MODIS_FIRE_T1"):
+        if candidate in ds.data_vars:
+            return candidate
+    raise KeyError(f"no fire variable found in {list(ds.data_vars)}")
 
 
 def hdr(n, title):
@@ -99,7 +108,7 @@ def check_lulc(ds):
 
 def check_fire_provenance(ds):
     hdr(3, "Fire label: which script produced the published mask?")
-    fire = ds["MODIS_FIRE_T1"].values
+    fire = ds[fire_var(ds)].values
     T = fire.shape[0]
     per_frame = fire.sum(axis=(1, 2))
     print(f"  total fire pixel-hours: {fire.sum():,.0f}")
@@ -150,7 +159,7 @@ def check_fire_provenance(ds):
 
 def check_leakage(ds):
     hdr(5, "Temporal leakage: how much of frame T+k is just frame T?")
-    fire = ds["MODIS_FIRE_T1"].values > 0.5
+    fire = ds[fire_var(ds)].values > 0.5
     for k in (1, 8, 24, 48):
         a = fire[:-k]
         b = fire[k:]
@@ -166,22 +175,23 @@ def check_leakage(ds):
 
 
 def check_crop_offbyone(ds):
-    hdr(6, "Crop off-by-one in merge_dynamic.py")
-    # merge_dynamic crops with slice(min_idx, max_idx) which drops the last valid
-    # row/column. Detect by checking whether the DEM still has valid data hard
-    # against the final edge.
+    hdr(6, "Crop extent: was the last valid row/column kept?")
     dem = ds["DEM"].values
     print(f"  stored shape: {dem.shape}")
     print(f"  DEM>0 on first row: {(dem[0] > 0).mean():.3f}, last row: {(dem[-1] > 0).mean():.3f}")
     print(f"  DEM>0 on first col: {(dem[:, 0] > 0).mean():.3f}, last col: {(dem[:, -1] > 0).mean():.3f}")
-    print("\n  merge_dynamic.py:191 uses slice(lat_min_idx, lat_max_idx).")
-    print("  Python slices are half-open, so the last valid row and column found")
-    print("  by np.argwhere are excluded from the published file.")
+    full = (DECLARED_H, DECLARED_W)
+    if dem.shape == full:
+        print(f"  -> Grid is the full declared {full[0]}x{full[1]}; nothing was trimmed.")
+    else:
+        lost = (full[0] - dem.shape[0], full[1] - dem.shape[1])
+        print(f"  -> {lost[0]} row(s) and {lost[1]} column(s) short of the declared grid.")
+        print("     A half-open slice(min, max) drops the last valid row/col; use max + 1.")
 
 
 def check_edge_clamping(ds):
     hdr(7, "Out-of-bounds fire clamped onto the grid edge")
-    fire = ds["MODIS_FIRE_T1"].values > 0.5
+    fire = ds[fire_var(ds)].values > 0.5
     ever = fire.any(axis=0)
     H, W = ever.shape
     edge = ever[0].sum() + ever[-1].sum() + ever[:, 0].sum() + ever[:, -1].sum()
@@ -201,55 +211,61 @@ def check_edge_clamping(ds):
 
 
 def check_modis_mapping(ds):
-    hdr(8, "MODIS point -> pixel mapping (searchsorted vs nearest)")
+    hdr(8, "Do the file's own fire pixels sit in the true nearest cell?")
     if not os.path.exists(MODIS_CSV):
         print("  MODIS csv not found; skipping.")
         return
+    if "OBSERVED_FIRE" not in ds.data_vars:
+        print("  Old schema (no OBSERVED_FIRE); skipping.")
+        return
+
     df = pd.read_csv(MODIS_CSV)
-    lats = ds.latitude.values
-    lons = ds.longitude.values
-    p_lat = df["latitude"].values
-    p_lon = df["longitude"].values
+    lats, lons = ds.latitude.values, ds.longitude.values
+    times = ds.valid_time.values
 
-    # Reproduce merge_dynamic.py's index computation exactly
-    if lats[1] > lats[0]:
-        ss_lat = np.searchsorted(lats, p_lat)
+    thr = ds.attrs.get("modis_min_confidence", 0)
+    if "confidence" in df:
+        df = df[df["confidence"] >= thr]
+    if "type" in df:
+        df = df[df["type"] == 0]
+
+    ts = pd.to_datetime(df["acq_timestamp"]).dt.round("h")
+    tmap = {pd.to_datetime(t): i for i, t in enumerate(times)}
+
+    half_lat = abs(lats[1] - lats[0]) / 2
+    half_lon = abs(lons[1] - lons[0]) / 2
+    inside = ((df["latitude"] >= lats.min() - half_lat)
+              & (df["latitude"] <= lats.max() + half_lat)
+              & (df["longitude"] >= lons.min() - half_lon)
+              & (df["longitude"] <= lons.max() + half_lon))
+
+    obs = ds["OBSERVED_FIRE"].values
+    checked = placed = 0
+    for (_, row), t in zip(df[inside].iterrows(), ts[inside]):
+        ti = tmap.get(t)
+        if ti is None:
+            continue
+        yi = int(np.abs(lats - row["latitude"]).argmin())
+        xi = int(np.abs(lons - row["longitude"]).argmin())
+        checked += 1
+        placed += int(obs[ti, yi, xi] > 0)
+
+    print(f"  detections kept by the file's own filters: {checked}")
+    print(f"  found at their TRUE NEAREST cell and hour: {placed} "
+          f"({100 * placed / max(checked, 1):.1f}%)")
+    if checked and placed == checked:
+        print("  -> Every detection is where nearest-cell placement puts it.")
     else:
-        ss_lat = len(lats) - 1 - np.searchsorted(lats[::-1], p_lat)
-    if lons[1] > lons[0]:
-        ss_lon = np.searchsorted(lons, p_lon)
-    else:
-        ss_lon = len(lons) - 1 - np.searchsorted(lons[::-1], p_lon)
-    ss_lat_c = np.clip(ss_lat, 0, len(lats) - 1)
-    ss_lon_c = np.clip(ss_lon, 0, len(lons) - 1)
+        print(f"  -> {checked - placed} detection(s) are not at their nearest cell.")
 
-    # True nearest index
-    nn_lat = np.abs(lats[None, :] - p_lat[:, None]).argmin(axis=1)
-    nn_lon = np.abs(lons[None, :] - p_lon[:, None]).argmin(axis=1)
+    out = int((~inside).sum())
+    edge = np.zeros(obs.shape[1:], dtype=bool)
+    edge[0, :] = edge[-1, :] = edge[:, 0] = edge[:, -1] = True
+    print(f"\n  detections outside the domain: {out} -> "
+          f"{'dropped' if out == 0 or obs[:, edge].sum() == 0 else 'possibly clamped to border'}")
 
-    mism_lat = (ss_lat_c != nn_lat)
-    mism_lon = (ss_lon_c != nn_lon)
-    print(f"  MODIS detections: {len(df)}")
-    print(f"  lat index differs from true nearest: {mism_lat.sum()} "
-          f"({100 * mism_lat.mean():.1f}%)")
-    print(f"  lon index differs from true nearest: {mism_lon.sum()} "
-          f"({100 * mism_lon.mean():.1f}%)")
-    both = (mism_lat | mism_lon)
-    print(f"  detections landing in the wrong cell: {both.sum()} "
-          f"({100 * both.mean():.1f}%)")
 
-    # Signed bias: searchsorted rounds toward one side systematically
-    bias_lat = (ss_lat_c.astype(int) - nn_lat.astype(int))
-    bias_lon = (ss_lon_c.astype(int) - nn_lon.astype(int))
-    print(f"  signed lat index bias: mean={bias_lat.mean():+.3f} cells")
-    print(f"  signed lon index bias: mean={bias_lon.mean():+.3f} cells")
-    print("  (a nonzero mean is a systematic geolocation shift, not random noise)")
-
-    # How many points fall outside the domain and get clamped
-    out = ((p_lat > lats.max()) | (p_lat < lats.min()) |
-           (p_lon > lons.max()) | (p_lon < lons.min()))
-    print(f"\n  detections outside the cropped grid: {out.sum()} "
-          f"({100 * out.mean():.1f}%) -> clamped onto the border, not dropped")
+_DS_ATTRS = {}
 
 
 def check_modis_filtering():
@@ -273,7 +289,12 @@ def check_modis_filtering():
         print(f"  confidence: min={c.min()} median={c.median()} max={c.max()}")
         for thr in (30, 50, 80):
             print(f"    below {thr}: {(c < thr).sum()} ({100 * (c < thr).mean():.1f}%)")
-        print("  -> clean-datasets/modis.py applies no confidence threshold.")
+        thr = _DS_ATTRS.get("modis_min_confidence")
+    if thr is None:
+        print("  -> No modis_min_confidence recorded; source was used unfiltered.")
+    else:
+        print(f"  -> File records modis_min_confidence = {thr}; "
+              f"{int((c < thr).sum())} detections were dropped by it.")
     if "daynight" in df:
         print(f"  daynight: {df['daynight'].value_counts().to_dict()}")
 
@@ -284,11 +305,11 @@ def check_static_stored_as_dynamic(ds):
         da = ds[var]
         if "valid_time" not in da.dims:
             continue
-        a = da.isel(valid_time=0).values
-        b = da.isel(valid_time=len(ds.valid_time) // 2).values
-        c = da.isel(valid_time=-1).values
-        constant = np.array_equal(np.nan_to_num(a), np.nan_to_num(b)) and \
-                   np.array_equal(np.nan_to_num(a), np.nan_to_num(c))
+        # Probe frames are not enough: a sparse mask is all-zero at most
+        # timesteps, so three probes agree and the variable looks constant when
+        # it is not. Compare against every frame.
+        values = np.nan_to_num(da.values)
+        constant = bool((values == values[0]).all())
         if constant:
             nbytes = da.nbytes / 1e6
             print(f"  {var:>14}: CONSTANT over time but stored {nbytes:,.0f} MB "
@@ -346,7 +367,9 @@ def main():
         print(f"Not found: {NC_PATH}\nRun this from the Model/ directory.")
         return
     print(f"Auditing {NC_PATH} ({os.path.getsize(NC_PATH) / 1e9:.2f} GB)")
-    ds = xr.open_dataset(NC_PATH, engine="h5netcdf")
+    ds = xr.open_dataset(NC_PATH, engine="netcdf4")
+    global _DS_ATTRS
+    _DS_ATTRS = dict(ds.attrs)
 
     check_grid(ds)
     check_lulc(ds)

@@ -1,6 +1,12 @@
 """
 Follow-up audit: where does every fire pixel in the published file come from?
 
+HISTORICAL. This script audits the OLD artifact,
+final_feature_stack_DYNAMIC_interpolated.nc, and is kept as the record of why
+that file was withdrawn. The corrected pipeline writes
+final_feature_stack_RELEASE.nc with OBSERVED_FIRE / ACTIVE_FIRE / BURNED_AREA;
+audit that one with audit_release_readiness.py instead.
+
 Compares the raw MODIS detections -> final_feature_stack_DYNAMIC_new.nc (rasterised)
 -> final_feature_stack_DYNAMIC_interpolated.nc (published), and quantifies how much
 of the published label is observation and how much is synthesised.

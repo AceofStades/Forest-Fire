@@ -215,12 +215,254 @@ def test_era5_transform():
           f"{'not exercised' if lats[1] < lats[0] else 'exercised'} by this data")
 
 
+# ---------------------------------------------------------------- fix #5 ----
+
+def test_cell_centre_coords():
+    hdr("Fix #5 - output coordinate labels are cell centres")
+    left, bottom, right, top = TARGET_BOUNDS
+
+    # The formula now used in era5-resample.py
+    cell_lat = (top - bottom) / TARGET_H
+    cell_lon = (right - left) / TARGET_W
+    lats = top - (np.arange(TARGET_H) + 0.5) * cell_lat
+    lons = left + (np.arange(TARGET_W) + 0.5) * cell_lon
+
+    # Ground truth: the centres of the raster reproject actually writes into
+    tr = rasterio.transform.from_bounds(*TARGET_BOUNDS, TARGET_W, TARGET_H)
+    ref_lons, _ = rasterio.transform.xy(tr, [0] * TARGET_W, list(range(TARGET_W)))
+    _, ref_lats = rasterio.transform.xy(tr, list(range(TARGET_H)), [0] * TARGET_H)
+
+    check("latitudes match the raster's true cell centres",
+          np.allclose(lats, ref_lats), f"max err {np.abs(lats - ref_lats).max():.3e}")
+    check("longitudes match the raster's true cell centres",
+          np.allclose(lons, ref_lons), f"max err {np.abs(lons - ref_lons).max():.3e}")
+    check("spacing is extent/N, not extent/(N-1)",
+          np.isclose(abs(lats[1] - lats[0]), cell_lat))
+    check("no coordinate falls outside the declared bounds",
+          lats.max() < top and lats.min() > bottom
+          and lons.max() < right and lons.min() > left)
+
+    old = np.linspace(top, bottom, TARGET_H)
+    drift = abs(abs(old[1] - old[0]) - cell_lat) * TARGET_H
+    print(f"\n  old linspace drift across the grid: {drift:.6f} deg "
+          f"({drift * 111:.3f} km ~ {drift / cell_lat:.2f} cells)")
+    print(f"  new formula drift: {np.abs(lats - ref_lats).max() * 111:.6f} km")
+
+
+# ------------------------------------------------------- fixes #9 and #12 ----
+
+def test_fire_mask_filtering(tmpdir="/tmp/claude-1000"):
+    hdr("Fixes #9 / #8 - out-of-domain and low-confidence detections are dropped")
+    import merge_dynamic as md
+
+    lats = np.linspace(31.0, 30.0, 50)      # descending, like the real grid
+    lons = np.linspace(78.0, 79.0, 60)
+    times = pd.date_range("2016-04-01", periods=6, freq="h")
+    template = xr.Dataset(coords={"valid_time": times,
+                                  "latitude": lats, "longitude": lons})
+
+    rows = [
+        # in-domain, high confidence -> must be kept.
+        # Deliberately off cell boundaries: a point exactly between two centres
+        # is a genuine tie, and tie handling is covered by test_nearest_index.
+        (30.52, 78.53, 90, 0, "2016-04-01 01:00:00"),
+        (30.9, 78.1, 75, 0, "2016-04-01 02:00:00"),
+        # out of the spatial domain -> must be dropped, NOT clamped to the border
+        (45.0, 78.5, 95, 0, "2016-04-01 01:00:00"),
+        (30.5, 20.0, 95, 0, "2016-04-01 01:00:00"),
+        # below the confidence floor -> dropped
+        (30.4, 78.4, 5, 0, "2016-04-01 03:00:00"),
+        # non-vegetation source -> dropped
+        (30.6, 78.6, 99, 2, "2016-04-01 04:00:00"),
+    ]
+    df = pd.DataFrame(rows, columns=["latitude", "longitude", "confidence",
+                                     "type", "acq_timestamp"])
+    os.makedirs(tmpdir, exist_ok=True)
+    csv = os.path.join(tmpdir, "_test_modis.csv")
+    df.to_csv(csv, index=False)
+
+    out = md.generate_dynamic_fire_mask(csv, template)
+    observed = out["OBSERVED_FIRE"].values
+    active = out["ACTIVE_FIRE"].values
+    burned = out["BURNED_AREA"].values
+
+    check("exactly the 2 valid detections are rasterised",
+          observed.sum() == 2, f"got {observed.sum():.0f}")
+
+    border = np.zeros(observed.shape[1:], dtype=bool)
+    border[0, :] = border[-1, :] = border[:, 0] = border[:, -1] = True
+    check("no fire manufactured on the border by clamping",
+          observed[:, border].sum() == 0,
+          f"border fire = {observed[:, border].sum():.0f}")
+
+    # The kept detections must land in their true nearest cell.
+    for lat, lon, t_idx in [(30.52, 78.53, 1), (30.9, 78.1, 2)]:
+        yi = int(np.abs(lats - lat).argmin())
+        xi = int(np.abs(lons - lon).argmin())
+        check(f"detection ({lat}, {lon}) marked at nearest cell ({yi}, {xi})",
+              observed[t_idx, yi, xi] == 1.0)
+
+    os.remove(csv)
+
+
+def test_fire_channel_semantics(tmpdir="/tmp/claude-1000"):
+    hdr("Fix #3 - ACTIVE_FIRE is causal and extinguishes; BURNED_AREA is monotone")
+    import merge_dynamic as md
+
+    lats = np.linspace(31.0, 30.0, 20)
+    lons = np.linspace(78.0, 79.0, 20)
+    times = pd.date_range("2016-04-01", periods=48, freq="h")
+    template = xr.Dataset(coords={"valid_time": times,
+                                  "latitude": lats, "longitude": lons})
+
+    # One detection at hour 10, another elsewhere at hour 30.
+    df = pd.DataFrame(
+        [(30.52, 78.53, 90, 0, "2016-04-01 10:00:00"),
+         (30.72, 78.23, 90, 0, "2016-04-01 06:00:00")],
+        columns=["latitude", "longitude", "confidence", "type", "acq_timestamp"])
+    os.makedirs(tmpdir, exist_ok=True)
+    csv = os.path.join(tmpdir, "_test_modis_sem.csv")
+    df.to_csv(csv, index=False)
+
+    out = md.generate_dynamic_fire_mask(csv, template)
+    observed = out["OBSERVED_FIRE"].values
+    active = out["ACTIVE_FIRE"].values
+    burned = out["BURNED_AREA"].values
+    P = md.PERSISTENCE_HOURS
+    os.remove(csv)
+
+    # Causality: no cell may be alight before its own first observation.
+    first_obs = np.where(observed.any(axis=(1, 2)))[0].min()
+    check("nothing is alight before the first observation",
+          active[:first_obs].sum() == 0,
+          f"first obs at t={first_obs}, prior fire={active[:first_obs].sum():.0f}")
+
+    for t in range(active.shape[0]):
+        lit = active[t] > 0
+        if not lit.any():
+            continue
+        # every lit cell must have been observed at some t' <= t
+        prior = observed[:t + 1].any(axis=0)
+        if not np.all(prior[lit]):
+            check(f"frame {t} contains fire with no prior observation", False)
+            break
+    else:
+        check("every lit cell traces back to an earlier or current observation", True)
+
+    # Bounded persistence: each detection burns for exactly P hours.
+    yi = int(np.abs(lats - 30.52).argmin())
+    xi = int(np.abs(lons - 78.53).argmin())
+    run = active[:, yi, xi]
+    check(f"detection at t=10 burns for exactly {P} h then goes out",
+          run[10:10 + P].all() and run[:10].sum() == 0
+          and run[10 + P:].sum() == 0,
+          f"run={np.where(run > 0)[0].tolist()}")
+
+    # Extinction actually happens somewhere in the series.
+    per_frame = active.sum(axis=(1, 2))
+    check("total active fire decreases at some point (fires go out)",
+          (np.diff(per_frame) < 0).any(),
+          f"decreases at {(np.diff(per_frame) < 0).sum()} steps")
+
+    # BURNED_AREA is monotone and is the running max of ACTIVE_FIRE.
+    check("BURNED_AREA never decreases",
+          bool((np.diff(burned, axis=0) >= 0).all()))
+    check("BURNED_AREA equals the running max of ACTIVE_FIRE",
+          np.array_equal(burned, np.maximum.accumulate(active, axis=0)))
+    check("ACTIVE_FIRE is a subset of BURNED_AREA",
+          bool((active <= burned).all()))
+    check("OBSERVED_FIRE is a subset of ACTIVE_FIRE",
+          bool((observed <= active).all()))
+
+
+def test_lulc_classification():
+    hdr("Fix #1 - LULC holds class codes, not red-channel intensities")
+    tif = "dataset/resampled-fix/lulc_classified.tif"
+    legend = "dataset/LULC/lulc_legend.csv"
+    if not os.path.exists(tif):
+        print("  SKIP: run preprocessing/lulc_classify.py first")
+        return
+
+    import csv as _csv
+    with rasterio.open(tif) as s:
+        lulc = s.read(1)
+        check("classified raster is single-band uint8",
+              s.count == 1 and s.dtypes[0] == "uint8",
+              f"count={s.count} dtype={s.dtypes[0]}")
+        check("nodata is the reserved UNCLASSIFIED code", s.nodata == 0)
+
+    with open(legend) as f:
+        rows = list(_csv.DictReader(f))
+    codes = {int(r["code"]) for r in rows}
+
+    present = set(np.unique(lulc).tolist())
+    check("every code in the raster appears in the legend",
+          present <= codes, f"orphans={sorted(present - codes)}")
+    check("class count is a plausible legend size, not 256 intensities",
+          2 <= len(present) <= 40, f"{len(present)} classes")
+
+    # The old failure mode: values spread across the full 0-255 intensity range.
+    check("codes are a small contiguous range, not 0-255 intensities",
+          max(present) < 40, f"max code = {max(present)}")
+
+    bg = {int(r["code"]) for r in rows if r["is_background"] == "true"}
+    bg_share = np.isin(lulc, list(bg)).mean()
+    print(f"\n  {len(present)} distinct codes on the 1 km grid")
+    print(f"  background / unclassified share: {100 * bg_share:.1f}% "
+          f"(source map covers only the state polygon)")
+    check("background is flagged in the legend rather than silently mixed in",
+          len(bg) > 0)
+
+
+def test_metadata():
+    hdr("Fix #12 - published file is self-describing")
+    import merge_dynamic as md
+
+    lats = np.linspace(31.0, 30.0, 5)
+    lons = np.linspace(78.0, 79.0, 6)
+    times = pd.date_range("2016-04-01", periods=3, freq="h")
+    ds = xr.Dataset(
+        {
+            "t2m": (("valid_time", "latitude", "longitude"),
+                    np.zeros((3, 5, 6), dtype=np.float32)),
+            "DEM": (("latitude", "longitude"), np.zeros((5, 6), dtype=np.float32)),
+            "OBSERVED_FIRE": (("valid_time", "latitude", "longitude"),
+                              np.zeros((3, 5, 6), dtype=np.float32)),
+            "ACTIVE_FIRE": (("valid_time", "latitude", "longitude"),
+                            np.zeros((3, 5, 6), dtype=np.float32)),
+            "BURNED_AREA": (("valid_time", "latitude", "longitude"),
+                            np.zeros((3, 5, 6), dtype=np.float32)),
+        },
+        coords={"valid_time": times, "latitude": lats, "longitude": lons},
+    )
+    out = md.add_metadata(ds)
+
+    check("global title/summary present", bool(out.attrs.get("title"))
+          and bool(out.attrs.get("summary")))
+    check("CRS recorded", out.attrs.get("spatial_ref") == "EPSG:4326")
+    check("coordinate convention stated",
+          "centre" in out.attrs.get("coordinate_convention", ""))
+    check("confidence threshold recorded",
+          out.attrs.get("modis_min_confidence") == md.MIN_CONFIDENCE)
+    check("every data variable has units",
+          all(out[v].attrs.get("units") for v in out.data_vars),
+          str({v: out[v].attrs.get("units") for v in out.data_vars}))
+    check("lat/lon carry CF standard names",
+          out.latitude.attrs.get("standard_name") == "latitude"
+          and out.longitude.attrs.get("standard_name") == "longitude")
+
+
 def main():
     if not os.path.exists("dataset"):
         print("Run this from the Model/ directory.")
         return 1
     test_nearest_index()
     test_era5_transform()
+    test_cell_centre_coords()
+    test_fire_mask_filtering()
+    test_fire_channel_semantics()
+    test_lulc_classification()
+    test_metadata()
 
     hdr("SUMMARY")
     if _failures:
