@@ -313,3 +313,4 @@ AGENTS.md
 
 # Kaggle upload staging (hardlinks to the 2.7 GiB release artifact)
 Model/kaggle-upload*/
+Model/kaggle-kernel/

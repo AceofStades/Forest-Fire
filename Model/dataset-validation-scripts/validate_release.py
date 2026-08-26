@@ -455,6 +455,57 @@ def t_metadata(ds):
               ds[c].attrs.get("standard_name") == c)
 
 
+# ----------------------------------------------------------------- 11 ------
+
+def t_coverage(ds):
+    """Coverage claims made in the dataset card, verified against the file.
+
+    These exist so the card cannot drift from the data: every figure quoted in
+    its Coverage section is asserted here.
+    """
+    hdr("11. Coverage (claims made in the dataset card)")
+    t = pd.to_datetime(ds["valid_time"].values)
+    obs = ds["OBSERVED_FIRE"].values.astype(bool)
+
+    steps = np.diff(t.values).astype("timedelta64[h]").astype(int)
+    check("weather axis is gapless hourly", set(steps.tolist()) == {1},
+          f"step sizes {sorted(set(steps.tolist()))}")
+
+    hrs = np.nonzero(obs.sum(axis=(1, 2)) > 0)[0]
+    check("card's count of detection-bearing hours (125)", len(hrs) == 125,
+          f"{len(hrs)}")
+
+    gaps = np.diff(hrs)
+    check("card's longest observation blackout (84 h)", int(gaps.max()) == 84,
+          f"{int(gaps.max())} h at {t[hrs[int(np.argmax(gaps))]]}")
+
+    # MODIS is a polar orbiter: most hours of the day are never sampled.
+    hours_of_day = {int(t[h].hour) for h in hrs}
+    check("detections fall in only part of the day (polar orbiter)",
+          len(hours_of_day) < 24,
+          f"{len(hours_of_day)}/24 hours ever contain a detection")
+    info(f"overpass hours (UTC): {sorted(hours_of_day)}")
+
+    ever = obs.any(axis=0)
+    la, lo = ds["latitude"].values, ds["longitude"].values
+    yy, xx = np.nonzero(ever)
+    check("card's burned-cell count (2,372)", int(ever.sum()) == 2372,
+          f"{int(ever.sum())}")
+    check("fire does not reach the eastern edge of the grid",
+          lo[xx].max() < lo.max() - 0.3,
+          f"easternmost fire {lo[xx].max():.3f} vs grid edge {lo.max():.3f}")
+    check("fire does not reach the northern edge of the grid",
+          la[yy].max() < la.max() - 0.2,
+          f"northernmost fire {la[yy].max():.3f} vs grid edge {la.max():.3f}")
+    info(f"fire bbox {lo[xx].min():.3f}-{lo[xx].max():.3f} E, "
+         f"{la[yy].min():.3f}-{la[yy].max():.3f} N")
+
+    # No variable may contain NaN: the card promises real data in every cell.
+    bad = [v for v in ds.data_vars
+           if ds[v].dtype.kind == "f" and bool(np.isnan(ds[v].values).any())]
+    check("no NaN in any variable", not bad, f"NaN in {bad}")
+
+
 def main():
     if not os.path.exists(NC):
         print(f"Not found: {NC}. Run from the Model/ directory.")
@@ -472,6 +523,7 @@ def main():
     t_lulc(ds)
     t_leakage(ds)
     t_metadata(ds)
+    t_coverage(ds)
 
     hdr("SUMMARY")
     n_pass = _results.count("PASS")
