@@ -376,42 +376,54 @@ def test_fire_channel_semantics(tmpdir="/tmp/claude-1000"):
 
 
 def test_lulc_classification():
-    hdr("Fix #1 - LULC holds class codes, not red-channel intensities")
-    tif = "dataset/resampled-fix/lulc_classified.tif"
-    legend = "dataset/LULC/lulc_legend.csv"
+    hdr("Fix #1 - land cover holds real, named class codes")
+    tif = "dataset/resampled-fix/worldcover_1km.tif"
+    legend = "dataset/WorldCover/worldcover_legend.csv"
     if not os.path.exists(tif):
-        print("  SKIP: run preprocessing/lulc_classify.py first")
+        print("  SKIP: run preprocessing/worldcover_resample.py first")
         return
 
     import csv as _csv
     with rasterio.open(tif) as s:
         lulc = s.read(1)
-        check("classified raster is single-band uint8",
+        check("land cover raster is single-band uint8",
               s.count == 1 and s.dtypes[0] == "uint8",
               f"count={s.count} dtype={s.dtypes[0]}")
-        check("nodata is the reserved UNCLASSIFIED code", s.nodata == 0)
+        check("raster sits on the target grid",
+              (s.height, s.width) == (TARGET_H, TARGET_W),
+              f"{s.height}x{s.width}")
+        b = s.bounds
+        check("raster bounds match the target bounds",
+              max(abs(a - t) for a, t in zip(
+                  (b.left, b.bottom, b.right, b.top), TARGET_BOUNDS)) < 1e-9,
+              f"{tuple(round(v, 6) for v in b)}")
 
     with open(legend) as f:
         rows = list(_csv.DictReader(f))
     codes = {int(r["code"]) for r in rows}
-
+    names = {int(r["code"]): r["name"] for r in rows}
     present = set(np.unique(lulc).tolist())
+
     check("every code in the raster appears in the legend",
           present <= codes, f"orphans={sorted(present - codes)}")
-    check("class count is a plausible legend size, not 256 intensities",
-          2 <= len(present) <= 40, f"{len(present)} classes")
+    check("every present code has a real class name",
+          all(names.get(c, "").strip() not in ("", "?") for c in present),
+          "the Bhuvan render this replaced had no recoverable names")
+    check("codes are ESA WorldCover codes",
+          present <= {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100},
+          f"unexpected={sorted(present - {0,10,20,30,40,50,60,70,80,90,95,100})}")
 
-    # The old failure mode: values spread across the full 0-255 intensity range.
-    check("codes are a small contiguous range, not 0-255 intensities",
-          max(present) < 40, f"max code = {max(present)}")
+    # WorldCover is global, so the off-map background that dominated the Bhuvan
+    # layer (57% of the grid) should be entirely absent.
+    nodata_share = float((lulc == 0).mean())
+    check("no off-map background remains", nodata_share == 0.0,
+          f"{100 * nodata_share:.3f}% unclassified")
 
-    bg = {int(r["code"]) for r in rows if r["is_background"] == "true"}
-    bg_share = np.isin(lulc, list(bg)).mean()
-    print(f"\n  {len(present)} distinct codes on the 1 km grid")
-    print(f"  background / unclassified share: {100 * bg_share:.1f}% "
-          f"(source map covers only the state polygon)")
-    check("background is flagged in the legend rather than silently mixed in",
-          len(bg) > 0)
+    burnable = {int(r["code"]) for r in rows
+                if r["is_burnable"].strip().lower() == "true"}
+    share = float(np.isin(lulc, list(burnable)).mean())
+    print(f"\n  {len(present)} distinct classes on the 1 km grid, "
+          f"{100 * share:.1f}% burnable")
 
 
 def test_metadata():

@@ -1,5 +1,5 @@
 """
-Pre-upload validation of final_feature_stack_RELEASE.nc.
+Pre-upload validation of final_feature_stack_RELEASE_v2.nc.
 
 Independent of the code that built the file: wherever possible a claim is
 checked against the ORIGINAL source data (the MODIS csv, the DEM GeoTIFF, the
@@ -21,11 +21,12 @@ import rasterio
 import xarray as xr
 from rasterio.warp import Resampling, reproject
 
-NC = "dataset/final_feature_stack_RELEASE.nc"
+NC = "dataset/final_feature_stack_RELEASE_v2.nc"
 MODIS_CSV = "dataset/MODIS/final-modis.csv"
 DEM_SRC = "dataset/DEM/merged_dem.tif"
 ERA5_SRC = "dataset/ERA5-Land/final-era5_rechunked.nc"
-LEGEND = "dataset/LULC/lulc_legend.csv"
+LEGEND = "dataset/WorldCover/worldcover_legend.csv"
+PURITY = "dataset/resampled-fix/worldcover_1km_purity.tif"
 
 BOUNDS = (77.5, 28.7, 81.1, 31.5)
 H, W = 311, 400
@@ -340,28 +341,66 @@ def t_physical(ds):
 # ------------------------------------------------------------------ 8 ------
 
 def t_lulc(ds):
-    hdr("8. LULC reconstruction")
+    hdr("8. Land cover (ESA WorldCover)")
     lulc = ds["LULC"].values
     codes = set(np.unique(lulc).tolist())
-    if os.path.exists(LEGEND):
-        leg = pd.read_csv(LEGEND)
-        legend_codes = set(leg["code"].tolist())
-        check("every raster code appears in the legend", codes <= legend_codes,
-              f"orphans {sorted(codes - legend_codes)}")
-        bg = set(leg.loc[leg["is_background"] == True, "code"].tolist())  # noqa: E712
-        share = float(np.isin(lulc, list(bg)).mean())
-        info(f"{len(codes)} codes present; background covers {100 * share:.1f}%")
-        check("background share is under 60% (rest is real land cover)",
-              share < 0.60, f"{100 * share:.1f}%")
-    check("codes are a compact range, not 0-255 intensities", max(codes) < 40,
-          f"max code {max(codes)}")
 
-    # Fires should overwhelmingly fall on mapped land cover, not on background.
+    leg = pd.read_csv(LEGEND)
+    legend_codes = set(leg["code"].tolist())
+    burnable_codes = set(leg.loc[leg["is_burnable"], "code"].tolist())
+
+    check("every raster code appears in the legend", codes <= legend_codes,
+          f"orphans {sorted(codes - legend_codes)}")
+    check("codes are WorldCover codes, not palette indices",
+          codes <= {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100},
+          f"unexpected {sorted(codes - {0,10,20,30,40,50,60,70,80,90,95,100})}")
+
+    # WorldCover is global: unlike the Bhuvan render it replaced, there is no
+    # off-map background, so no-data should be absent entirely.
+    nodata = float((lulc == 0).mean())
+    check("no unclassified cells", nodata == 0.0, f"{100 * nodata:.3f}% are code 0")
+
+    burnable = np.isin(lulc, list(burnable_codes))
+    info(f"{len(codes)} classes present; {100 * burnable.mean():.1f}% burnable")
+    check("burnable share is plausible for Uttarakhand (50-90%)",
+          0.50 < burnable.mean() < 0.90, f"{100 * burnable.mean():.1f}%")
+
+    # Sanity against known geography rather than against the pipeline.
+    lat = ds["latitude"].values
+    snow = lulc == 70
+    if snow.any():
+        mean_snow_lat = float(lat[np.nonzero(snow)[0]].mean())
+        mean_lat = float(lat.mean())
+        check("snow/ice sits in the northern (high Himalaya) half",
+              mean_snow_lat > mean_lat,
+              f"snow mean lat {mean_snow_lat:.2f} vs grid mean {mean_lat:.2f}")
+        dem = ds["DEM"].values
+        valid = dem > 0
+        if (snow & valid).any():
+            snow_elev = float(dem[snow & valid].mean())
+            all_elev = float(dem[valid].mean())
+            check("snow/ice sits well above the mean elevation",
+                  snow_elev > all_elev + 500,
+                  f"snow {snow_elev:.0f} m vs grid {all_elev:.0f} m")
+
+    if os.path.exists(PURITY):
+        with rasterio.open(PURITY) as src:
+            share = src.read(1)
+        info(f"majority-class purity: mean {share.mean():.3f}, "
+             f"{100 * (share < 0.5).mean():.1f}% of cells below 50%")
+        check("most cells have a clear majority class",
+              float((share >= 0.5).mean()) > 0.85,
+              f"only {100 * (share >= 0.5).mean():.1f}% at/above 50%")
+
+    # Fires should overwhelmingly fall on land that can carry a fire.
     ever = ds["ACTIVE_FIRE"].values.astype(bool).any(axis=0)
-    if os.path.exists(LEGEND):
-        on_bg = float(np.isin(lulc[ever], list(bg)).mean())
-        check("under 15% of burned cells fall on map background",
-              on_bg < 0.15, f"{100 * on_bg:.1f}%")
+    on_burnable = float(burnable[ever].mean())
+    check("over 85% of burned cells fall on burnable classes",
+          on_burnable > 0.85, f"{100 * on_burnable:.1f}%")
+    info(f"burned cells by class: " + ", ".join(
+        f"{leg.loc[leg['code'] == c, 'name'].iloc[0]} {n}"
+        for c, n in sorted(zip(*np.unique(lulc[ever], return_counts=True)),
+                           key=lambda t: -t[1])[:5]))
 
 
 # ------------------------------------------------------------------ 9 ------

@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-NC_PATH = sys.argv[1] if len(sys.argv) > 1 else "dataset/final_feature_stack_RELEASE.nc"
+NC_PATH = sys.argv[1] if len(sys.argv) > 1 else "dataset/final_feature_stack_RELEASE_v2.nc"
 PREV_NC_PATH = "dataset/final_feature_stack_DYNAMIC_new.nc"
 MODIS_CSV = "dataset/MODIS/final-modis.csv"
 LULC_TIF = "dataset/resampled-fix/lulc_resampled.tif"
