@@ -67,7 +67,14 @@ def load_and_clean_static(path, name, template_ds, interp_method="nearest"):
 
         # Align to template
         da_aligned = da.interp_like(template_ds, method=interp_method)
-        return da_aligned.fillna(0)
+        da_aligned = da_aligned.fillna(0)
+
+        # Bilinear interpolation undershoots slightly around zero, which left a
+        # few cells at -1e-16 in a field that is a percentage. Clamp to the
+        # physical range so downstream sqrt/log transforms cannot produce NaN.
+        if name == "GHS_BUILT":
+            da_aligned = da_aligned.clip(0, 100)
+        return da_aligned
     except Exception as e:
         print(f"Error loading {name}: {e}")
         raise
@@ -343,6 +350,10 @@ def add_metadata(ds):
             "time_coverage_end": str(ds["valid_time"].values[-1]),
             "modis_min_confidence": MIN_CONFIDENCE,
             "coordinate_convention": "Coordinates are cell centres.",
+            "dem_nodata_note": (
+                "DEM == 0 marks no-data, not sea level; the lowest real "
+                "elevation in this grid is ~75 m."
+            ),
         }
     )
     return ds
