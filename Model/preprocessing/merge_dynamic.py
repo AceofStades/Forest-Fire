@@ -16,12 +16,15 @@ from tqdm import tqdm
 # --- 1. Paths ---
 ERA5_NC_PATH = "dataset/ERA5-Land/era5_resampled_1km_v2.nc"
 DEM_PATH = "dataset/resampled-fix/dem_resampled.tif"
-# Classified land cover from preprocessing/lulc_classify.py. The older
-# lulc_resampled.tif held the RED CHANNEL of an RGB map render, not class codes.
-LULC_PATH = "dataset/resampled-fix/lulc_classified.tif"
+# ESA WorldCover 10 m, majority-aggregated to the 1 km grid by
+# preprocessing/worldcover_resample.py. This replaces the earlier Bhuvan layer,
+# which was reconstructed from a lossy RGB map render and which NRSC's terms do
+# not permit us to redistribute. WorldCover is CC-BY-4.0 and carries real,
+# named class codes.
+LULC_PATH = "dataset/resampled-fix/worldcover_1km.tif"
 GHS_PATH = "dataset/resampled-fix/ghs_resampled.tif"
 MODIS_CSV_PATH = "dataset/MODIS/final-modis.csv"
-OUTPUT_NC_PATH = "dataset/final_feature_stack_RELEASE.nc"
+OUTPUT_NC_PATH = "dataset/final_feature_stack_RELEASE_v2.nc"
 
 # Minimum MODIS detection confidence (0-100) to accept as a fire label.
 # 30 keeps the "nominal" and "high" classes and drops the noisiest detections.
@@ -300,7 +303,8 @@ VAR_METADATA = {
         "to and including this step. Monotone by construction",
         "1", "Derived from ACTIVE_FIRE"),
     "DEM": ("Terrain elevation above sea level", "m", "SRTM-derived merged DEM"),
-    "LULC": ("Land use / land cover class code", "1", "Bhuvan LULC 50K (2016)"),
+    "LULC": ("Land cover class code; see worldcover_legend.csv", "1",
+             "ESA WorldCover 10m v200 (2021), areal majority per 1 km cell"),
     "GHS_BUILT": ("Built-up surface share", "%", "GHSL GHS-BUILT-S R2023A (2018)"),
 }
 
@@ -337,7 +341,7 @@ def add_metadata(ds):
                 "active-fire labels on a ~1 km grid over Uttarakhand, India."
             ),
             "institution": "Forest-Fire project",
-            "source": "ERA5-Land, MODIS active fire, SRTM DEM, Bhuvan LULC 50K, GHSL",
+            "source": "ERA5-Land, MODIS active fire, SRTM DEM, ESA WorldCover, GHSL",
             "Conventions": "CF-1.8",
             "geospatial_lat_min": float(lats.min()),
             "geospatial_lat_max": float(lats.max()),

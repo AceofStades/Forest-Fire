@@ -1,4 +1,13 @@
 """
+SUPERSEDED. The pipeline now uses ESA WorldCover via worldcover_resample.py.
+
+This script remains only for reproducibility of the earlier draft. Its output
+is NOT redistributable: NRSC grants Bhuvan data under a single-user, internal-
+use licence with digital databases restricted to authorised government users,
+so a derived product may not be published. Nothing it produces is included in
+the released dataset. Run it only against your own Bhuvan download, for your
+own internal use.
+
 Recover land-cover class codes from the RGB LULC render.
 
 dataset/LULC/UK_LULC50K_2016.tif is not a classified raster: it is a 3-band,
