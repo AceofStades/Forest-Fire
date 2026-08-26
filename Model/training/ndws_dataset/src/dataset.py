@@ -10,19 +10,17 @@ from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 # --- CONFIGURATION ---
-INPUT_NC_PATH = "dataset/final_feature_stack_RELEASE.nc"
+INPUT_NC_PATH = "dataset/final_feature_stack_RELEASE_v2.nc"
 CACHE_PATH = "stats_cache.pkl"
 ERA5_FEATURE_VARS = ["d2m", "t2m", "swvl1", "e", "u10", "v10", "tp", "cvl"]
 
-# LULC codes that are not land cover: 0 = UNCLASSIFIED, 1 = white map
-# background, 3 = grey map background. See dataset/LULC/lulc_legend.csv, whose
-# is_background column is the source of truth. Together they cover ~57% of the
-# grid, because the LULC source maps only the state polygon while the grid is a
-# rectangle around it.
+# ESA WorldCover class codes that cannot carry a vegetation fire: built-up,
+# bare/sparse, snow and ice, permanent water, and no-data. Everything else
+# (tree, shrub, grass, crop, wetland, mangrove, moss) is treated as burnable.
 #
-# Note: codes 10 and 14 are blue and are most likely water bodies, but the
-# legend carries no class names, so they are left burnable rather than guessed.
-LULC_BACKGROUND_CODES = (0, 1, 3)
+# WorldCover is global, so unlike the Bhuvan render this replaced there is no
+# off-map background: every cell in the grid carries a real class.
+LULC_NON_BURNABLE_CODES = (0, 50, 60, 70, 80)
 
 # Every channel derived from the fire observations. All of them must stay out of
 # the input features unless autoregressive mode is explicitly requested.
@@ -71,7 +69,7 @@ def _load_ds(nc_path=None, include_fire_input=False):
         print("--- Engineering Burnable_Mask from LULC ---")
         lulc_data = ds_loaded["LULC"].values
         # 1.0 means burnable land cover, 0.0 means background/unclassified.
-        burnable = (~np.isin(lulc_data, LULC_BACKGROUND_CODES)).astype(np.float32)
+        burnable = (~np.isin(lulc_data, LULC_NON_BURNABLE_CODES)).astype(np.float32)
         ds_loaded["Burnable_Mask"] = (("latitude", "longitude"), burnable)
 
         # Engineer Urban Mask from GHS_BUILT
