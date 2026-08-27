@@ -15,7 +15,12 @@ from tqdm import tqdm
 
 # --- 1. Paths ---
 ERA5_NC_PATH = "dataset/ERA5-Land/era5_resampled_1km_v2.nc"
-DEM_PATH = "dataset/resampled-fix/dem_resampled.tif"
+# Copernicus DEM GLO-30, averaged to the 1 km grid by dem_resample.py. The
+# previous dem_resampled.tif came from CartoDEM (P5_PAN_CD_* tiles), an
+# NRSC/ISRO product whose Bhuvan terms forbid redistributing a derivative --
+# and whose 0-filled nodata holes produced artificial 1,861 m/km cliffs that
+# fed straight into the Slope features.
+DEM_PATH = "dataset/resampled-fix/dem_copernicus_1km.tif"
 # ESA WorldCover 10 m, majority-aggregated to the 1 km grid by
 # preprocessing/worldcover_resample.py. This replaces the earlier Bhuvan layer,
 # which was reconstructed from a lossy RGB map render and which NRSC's terms do
@@ -302,7 +307,8 @@ VAR_METADATA = {
         "Cumulative burn scar: 1 where the cell has been alight at any time up "
         "to and including this step. Monotone by construction",
         "1", "Derived from ACTIVE_FIRE"),
-    "DEM": ("Terrain elevation above sea level", "m", "SRTM-derived merged DEM"),
+    "DEM": ("Terrain elevation above sea level", "m",
+            "Copernicus DEM GLO-30 (2021), averaged per 1 km cell"),
     "LULC": ("Land cover class code; see worldcover_legend.csv", "1",
              "ESA WorldCover 10m v200 (2021), areal majority per 1 km cell"),
     "GHS_BUILT": ("Built-up surface share", "%", "GHSL GHS-BUILT-S R2023A (2018)"),
@@ -341,7 +347,8 @@ def add_metadata(ds):
                 "active-fire labels on a ~1 km grid over Uttarakhand, India."
             ),
             "institution": "Forest-Fire project",
-            "source": "ERA5-Land, MODIS active fire, SRTM DEM, ESA WorldCover, GHSL",
+            "source": ("ERA5-Land, MODIS active fire, Copernicus DEM GLO-30, "
+                       "ESA WorldCover, GHSL"),
             "Conventions": "CF-1.8",
             "geospatial_lat_min": float(lats.min()),
             "geospatial_lat_max": float(lats.max()),
@@ -354,10 +361,6 @@ def add_metadata(ds):
             "time_coverage_end": str(ds["valid_time"].values[-1]),
             "modis_min_confidence": MIN_CONFIDENCE,
             "coordinate_convention": "Coordinates are cell centres.",
-            "dem_nodata_note": (
-                "DEM == 0 marks no-data, not sea level; the lowest real "
-                "elevation in this grid is ~75 m."
-            ),
         }
     )
     return ds
