@@ -23,7 +23,7 @@ from rasterio.warp import Resampling, reproject
 
 NC = "dataset/final_feature_stack_RELEASE_v2.nc"
 MODIS_CSV = "dataset/MODIS/final-modis.csv"
-DEM_SRC = "dataset/DEM/merged_dem.tif"
+DEM_SRC = "dataset/resampled-fix/dem_copernicus_1km.tif"
 ERA5_SRC = "dataset/ERA5-Land/final-era5_rechunked.nc"
 LEGEND = "dataset/WorldCover/worldcover_legend.csv"
 PURITY = "dataset/resampled-fix/worldcover_1km_purity.tif"
@@ -317,10 +317,16 @@ def t_physical(ds):
           pos_share < 0.05 and float(e.max()) < 1e-3,
           f"{100 * pos_share:.2f}% positive, max {e.max():.2e}")
     dem = ds["DEM"].values
-    check("DEM==0 is a nodata sentinel, well separated from real elevations",
-          float(dem[dem > 0].min()) > 50,
-          f"{int((dem == 0).sum())} nodata cells; lowest real value "
-          f"{dem[dem > 0].min():.1f} m")
+    # Copernicus DEM GLO-30 covers the whole grid, so unlike the CartoDEM layer
+    # it replaced there is no 0-fill and no nodata sentinel at all. A zero here
+    # would mean a coverage hole has crept back in -- and the old 0-fill
+    # produced artificial ~1,861 m/km cliffs in the Slope features.
+    n_zero = int((dem == 0).sum())
+    check("DEM has no nodata holes (Copernicus covers the full grid)",
+          n_zero == 0, f"{n_zero} zero cells")
+    check("no physically impossible slopes from coverage edges",
+          float(np.hypot(*np.gradient(dem)).max()) < 1500,
+          f"max {float(np.hypot(*np.gradient(dem)).max()):.0f} m/km")
 
     check("precipitation is non-negative",
           float(ds["tp"].values.min()) >= 0, f"min {ds['tp'].values.min():.2e}")
