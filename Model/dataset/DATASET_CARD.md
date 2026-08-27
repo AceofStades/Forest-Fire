@@ -20,7 +20,7 @@ single ~1 km grid over Uttarakhand, India, at hourly resolution.
 | `tp` | time, lat, lon | m | ERA5-Land total precipitation |
 | `e` | time, lat, lon | m w.e. | ERA5-Land total evaporation |
 | `cvl` | lat, lon | 1 | ERA5-Land low vegetation cover (static) |
-| `DEM` | lat, lon | m | SRTM-derived merged DEM |
+| `DEM` | lat, lon | m | Copernicus DEM GLO-30 (2021), averaged per cell |
 | `LULC` | lat, lon | class code (uint8) | ESA WorldCover 10 m v200 (2021), areal majority per cell |
 | `GHS_BUILT` | lat, lon | % | GHSL GHS-BUILT-S R2023A (2018) |
 | `OBSERVED_FIRE` | time, lat, lon | 0/1 (int8) | MODIS detections at their observed hour |
@@ -66,7 +66,9 @@ absolute IoU and judge against the 0.0105 baseline, not against 1.0.
   fire) and `confidence >= 30`; 2,634 of 2,828 detections retained. Points are
   assigned to the *nearest* grid cell. Detections outside the domain are dropped,
   not clamped to the border.
-- **DEM / GHS-BUILT** reprojected to the target grid with explicit nodata.
+- **DEM** from Copernicus DEM GLO-30 (~30 m), *averaged* to 1 km — about
+  1,100 source pixels per cell; a point sample would throw most away.
+- **GHS-BUILT** reprojected to the target grid with explicit nodata.
 - **Land cover** from ESA WorldCover 10 m v200 (2021). Downsampling to 1 km is
   100x in each direction, so ~11,664 source pixels fall in every target cell.
   Each cell takes the **areal majority** class — not a nearest-neighbour sample,
@@ -88,14 +90,8 @@ unclassified fill: 0.0% of the grid is code 0. **99.9% of cells that ever burn
 fall on burnable classes** (tree cover 2,125, cropland 194, grassland 50) — a
 useful independent check that the layer is correctly georeferenced.
 
-**Single region, single season.** April–May 2016 only. Do not expect the learned
-relationships to transfer to other regions or fire seasons without validation.
-
-**`DEM == 0` means no data, not sea level.** 6.6% of cells are outside the DEM's
-coverage and are filled with 0. The lowest real elevation in the grid is 75.4 m,
-so the sentinel is unambiguous — but mask it out rather than treating it as
-terrain. `GHS_BUILT` uses the same 0 fill; `LULC` does not — WorldCover
-classifies every cell in the grid.
+**Single region, single season.** April–May 2016 only. Do not expect these
+relationships to transfer to other regions or seasons without validation.
 
 **MODIS detections are not burned area.** Each is a ~1 km footprint flagged as
 containing thermal anomaly, not a mapped fire perimeter. Cloud and canopy cover
@@ -193,13 +189,20 @@ Derived from five sources, each redistributable with attribution:
 
 - **ERA5-Land** — Copernicus Climate Change Service (C3S) / ECMWF.
 - **MODIS active fire (FIRMS)** — NASA.
-- **SRTM** — NASA / USGS, public domain.
+- **Copernicus DEM GLO-30** — © DLR e.V. 2010-2014 and © Airbus Defence and
+  Space GmbH 2014-2018, provided under COPERNICUS by the European Union and
+  ESA; free for any use with attribution.
 - **ESA WorldCover 10 m v200 (2021)** — (c) ESA WorldCover project 2021.
   Contains modified Copernicus Sentinel data (2021), processed by the ESA
   WorldCover consortium. Licensed **CC-BY-4.0**.
 - **GHSL GHS-BUILT-S R2023A** — European Commission JRC, CC-BY-4.0.
 
-An earlier draft of this dataset used Bhuvan/NRSC LULC 50K. It was removed:
+An earlier draft used Bhuvan/NRSC products: LULC 50K and CartoDEM elevation
+tiles. Both were removed:
 NRSC grants a single-user, internal-use licence with digital databases
 restricted to authorised government users, which does not permit redistributing
 a derived product. **No NRSC data is present in this file.**
+
+Replacing the CartoDEM also fixed a bug: its nodata holes were 0-filled,
+creating artificial 1,861 m/km cliffs (against 141 m/km elsewhere) in the
+slope features. Copernicus covers every cell, so no fill is needed.
