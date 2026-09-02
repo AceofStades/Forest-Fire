@@ -80,8 +80,8 @@ absolute IoU and judge against the 0.0105 baseline, not against 1.0.
 **Land cover is a majority class, so mixed cells lose their minority.** At 1 km
 each cell is a single WorldCover class covering ~117 km2 of 10 m source. Mean
 purity of the winning class is **0.755** (median 0.766), and **8.3% of cells**
-have no class above 50% — the majority there is a plurality. Cells on a
-forest/cropland boundary are the usual case. If that matters, regenerate
+have no class above 50% — the majority there is a plurality. If that
+matters, regenerate
 per-class fractions with `preprocessing/worldcover_resample.py`, which computes
 them internally before taking the argmax.
 
@@ -100,8 +100,8 @@ cause missed detections, and overpass timing (~4/day) bounds temporal resolution
 
 ## Coverage
 
-**Spatial.** 311 x 400 cells at ~1 km, 77.504-81.095 E, 28.705-31.495 N. The
-grid is a *rectangle* drawn around Uttarakhand, so it also contains slivers of
+**Spatial.** 311 x 400 cells at ~1 km. The grid is a *rectangle* drawn around
+Uttarakhand, so it also contains slivers of
 Himachal Pradesh, Uttar Pradesh, Nepal and Tibet. No state boundary mask is
 included — if you need one, bring your own polygon. Every cell carries real
 data in every variable; there are no NaNs anywhere in the file.
@@ -163,13 +163,11 @@ Let xarray choose the engine. Kaggle's image ships `h5netcdf` but **not**
 `netcdf4`, so pinning `engine="netcdf4"` raises `unrecognized engine` there.
 Both read this file identically — same dtypes, same values.
 
-Only if you also *write* in the same process: do not open with one engine and
-write with another. `netCDF4` and `h5netcdf` each bundle their own HDF5
-library, and mixing them makes HDF5's dimension-scale calls fail with opaque
-errors. Reading alone is unaffected.
+If you also *write* in the same process, stick to one engine: `netCDF4` and
+`h5netcdf` bundle separate HDF5 libraries and mixing them breaks dimension-scale
+calls. Reading alone is unaffected.
 
-On FUSE mounts (ntfs-3g, sshfs) set `HDF5_USE_FILE_LOCKING=FALSE` before
-import; HDF5 otherwise takes locks those filesystems do not support.
+On FUSE mounts (ntfs-3g, sshfs) set `HDF5_USE_FILE_LOCKING=FALSE` first.
 
 ## Reproducing
 
@@ -180,8 +178,17 @@ python preprocessing/worldcover_resample.py         # WorldCover 10 m -> 1 km ma
 python preprocessing/resampling/era5-resample.py    # ERA5-Land -> 1 km grid
 python preprocessing/merge_dynamic.py               # merge everything -> RELEASE.nc
 python dataset-validation-scripts/test_preprocessing_fixes.py   # regression tests
-python dataset-validation-scripts/validate_release.py           # 77 checks against the sources
+python dataset-validation-scripts/validate_release.py           # 86 checks against the sources
 ```
+
+## Citation
+
+Cite the archived copy. The Zenodo DOI needs no Kaggle account and always
+resolves to the current version:
+
+> Bokade, R., Barai, V., Bhogle, S., & Chapherkar, Y. (2026). *Uttarakhand
+> Wildfire Dataset (April-May 2016)* [Data set]. Zenodo.
+> https://doi.org/10.5281/zenodo.22131871
 
 ## Licence and attribution
 
@@ -203,6 +210,5 @@ NRSC grants a single-user, internal-use licence with digital databases
 restricted to authorised government users, which does not permit redistributing
 a derived product. **No NRSC data is present in this file.**
 
-Replacing the CartoDEM also fixed a bug: its nodata holes were 0-filled,
-creating artificial 1,861 m/km cliffs (against 141 m/km elsewhere) in the
-slope features. Copernicus covers every cell, so no fill is needed.
+Replacing CartoDEM also fixed a bug: its 0-filled nodata holes created
+artificial 1,861 m/km cliffs (vs 141 m/km elsewhere) in the slope features.
