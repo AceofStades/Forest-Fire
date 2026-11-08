@@ -7,10 +7,12 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-yellow)
 ![Next.js](https://img.shields.io/badge/Next.js-15-black)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109-teal)
+[![Paper DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22668358.svg)](https://doi.org/10.5281/zenodo.22668358)
+[![Dataset DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22131871.svg)](https://doi.org/10.5281/zenodo.22131871)
 
 **A cutting-edge full-stack application for real-time forest fire prediction, 3D simulation, and safe path planning using Deep Learning.**
 
-[Features](#key-features) • [Architecture](#architecture) • [Getting Started](#getting-started) • [Contributing](#contributing)
+[Paper](https://doi.org/10.5281/zenodo.22668358) • [Features](#key-features) • [Architecture](#architecture) • [Getting Started](#getting-started) • [Citation](#citation) • [Contributing](#contributing)
 
 </div>
 
@@ -22,6 +24,8 @@
 
 The system consists of a robust **FastAPI** backend that serves predictions from a PyTorch-based model, and a modern **Next.js** frontend that visualizes data in 2D, offers simulation controls, and provides an interactive dashboard for decision-makers.
 
+> **Paper:** *A Hybrid Neural Physical Framework for Wildfire Propagation Modeling and Dynamic Evacuation Routing* (preprint, 2026): [doi.org/10.5281/zenodo.22668358](https://doi.org/10.5281/zenodo.22668358). The multimodal dataset it uses is archived at [doi.org/10.5281/zenodo.22131871](https://doi.org/10.5281/zenodo.22131871).
+>
 > **Research & Architecture:** Read the comprehensive project documentation, including dataset engineering and model architectures, in the [docs/project_overview.md](./docs/project_overview.md) file.
 
 ## Key Features
@@ -164,6 +168,36 @@ If you wish to retrain the model or explore the datasets:
 cd Model
 pip install -r requirements.txt
 # Check src/ for model definitions and train.py for training scripts
+```
+
+## Citation
+
+If you use this work, please cite the paper and, if you use the data, the dataset:
+
+> Bokade, R., Barai, V., Bhogle, S., Chapherkar, Y., & Kale, D. (2026). *A Hybrid Neural Physical
+> Framework for Wildfire Propagation Modeling and Dynamic Evacuation Routing* [Preprint]. Zenodo.
+> https://doi.org/10.5281/zenodo.22668358
+
+> Bokade, R., Barai, V., Bhogle, S., & Chapherkar, Y. (2026). *Uttarakhand Wildfire Dataset
+> (April-May 2016)* [Data set]. Zenodo. https://doi.org/10.5281/zenodo.22131871
+
+```bibtex
+@misc{bokade2026hybrid,
+  title     = {A Hybrid Neural Physical Framework for Wildfire Propagation Modeling and Dynamic Evacuation Routing},
+  author    = {Bokade, Rahul and Barai, Vishal and Bhogle, Shravani and Chapherkar, Yug and Kale, Dilip},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.22668358},
+  note      = {Preprint}
+}
+
+@dataset{bokade2026uttarakhand,
+  title     = {Uttarakhand Wildfire Dataset (April--May 2016)},
+  author    = {Bokade, Rahul and Barai, Vishal and Bhogle, Shravani and Chapherkar, Yug},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.22131871}
+}
 ```
 
 ## Contributing
